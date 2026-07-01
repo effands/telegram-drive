@@ -94,6 +94,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const displayedFiles = searchTerm.length > 2
         ? searchResults
         : allFiles.filter((f: TelegramFile) => f.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    const activeFolder = folders.find(folder => folder.id === activeFolderId) ?? null;
 
     const { data: bandwidth } = useQuery({
         queryKey: ['bandwidth'],
@@ -694,7 +695,12 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
             {settings.showAccountPanel ? (
                 <StorageAccountsPanel
+                    activeFolder={activeFolder}
                     onAddAccount={() => toast.info('Add Account flow is coming in the next step')}
+                    onFolderLockChanged={async () => {
+                        await handleSyncFolders(true);
+                        queryClient.invalidateQueries({ queryKey: ['files'] });
+                    }}
                     onClose={() => updateSetting('showAccountPanel', false)}
                 />
             ) : (

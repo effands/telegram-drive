@@ -1,9 +1,13 @@
 import { AlertTriangle, Database, PanelRightClose, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useAccountStorageSummary } from '../../../hooks/useAccounts';
+import type { TelegramFolder } from '../../../types';
 import { formatBytes } from '../../../utils';
+import { FolderAccountLock } from './FolderAccountLock';
 
 interface StorageAccountsPanelProps {
+    activeFolder: TelegramFolder | null;
     onAddAccount: () => void;
+    onFolderLockChanged: () => void | Promise<void>;
     onClose: () => void;
 }
 
@@ -13,7 +17,12 @@ function statusTone(status: string) {
     return 'text-rose-400 bg-rose-500/10';
 }
 
-export function StorageAccountsPanel({ onAddAccount, onClose }: StorageAccountsPanelProps) {
+export function StorageAccountsPanel({
+    activeFolder,
+    onAddAccount,
+    onFolderLockChanged,
+    onClose,
+}: StorageAccountsPanelProps) {
     const { data, isLoading, refetch } = useAccountStorageSummary();
     const accounts = data?.accounts ?? [];
 
@@ -45,6 +54,15 @@ export function StorageAccountsPanel({ onAddAccount, onClose }: StorageAccountsP
             </div>
 
             <div className="p-3 space-y-2 overflow-y-auto">
+                <FolderAccountLock
+                    folder={activeFolder}
+                    accounts={accounts}
+                    onChanged={async () => {
+                        await refetch();
+                        await onFolderLockChanged();
+                    }}
+                />
+
                 {accounts.map((account) => (
                     <div key={account.account_id} className="rounded-lg border border-telegram-border bg-telegram-bg/60 p-3">
                         <div className="flex items-start justify-between gap-2">

@@ -84,6 +84,35 @@ pub fn account_summary_from_db(conn: &Connection) -> Result<AccountStorageSummar
     Ok(AccountStorageSummary { total_bytes, total_files, accounts })
 }
 
+pub fn set_folder_locked_account_in_db(
+    conn: &Connection,
+    folder_id: i64,
+    account_id: Option<&str>,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("UPDATE folder_metadata SET locked_account_id = ? WHERE channel_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, account_id)).map_err(|e| e.to_string())?;
+    stmt.bind((2, folder_id)).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn get_folder_locked_account_from_db(
+    conn: &Connection,
+    folder_id: i64,
+) -> Result<Option<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT locked_account_id FROM folder_metadata WHERE channel_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, folder_id)).map_err(|e| e.to_string())?;
+
+    match stmt.next().map_err(|e| e.to_string())? {
+        sqlite::State::Row => stmt.read::<Option<String>, _>(0).map_err(|e| e.to_string()),
+        sqlite::State::Done => Ok(None),
+    }
+}
+
 #[tauri::command]
 pub async fn cmd_list_accounts(
     app_handle: AppHandle,
@@ -104,6 +133,17 @@ pub async fn cmd_account_storage_summary(
     let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
     migrate_default_account(&conn, &session_path)?;
     account_summary_from_db(&conn)
+}
+
+#[tauri::command]
+pub async fn cmd_set_folder_locked_account(
+    folder_id: i64,
+    account_id: Option<String>,
+    db_pool: State<'_, DbConnection>,
+) -> Result<bool, String> {
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    set_folder_locked_account_in_db(&conn, folder_id, account_id.as_deref())?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -165,5 +205,21 @@ mod tests {
             read_string(&conn, "SELECT account_id FROM shared_links WHERE id = 'share-1'"),
             DEFAULT_ACCOUNT_ID
         );
+    }
+
+    #[test]
+    fn folder_lock_round_trips_locked_account() {
+        let conn = memory_db();
+        migrate_default_account(&conn, "C:/session/telegram.session").unwrap();
+        conn.execute("INSERT INTO folder_metadata (channel_id, name, account_id) VALUES (100, 'Videos', 'default')").unwrap();
+
+        set_folder_locked_account_in_db(&conn, 100, Some("default")).unwrap();
+        assert_eq!(
+            get_folder_locked_account_from_db(&conn, 100).unwrap().as_deref(),
+            Some("default")
+        );
+
+        set_folder_locked_account_in_db(&conn, 100, None).unwrap();
+        assert_eq!(get_folder_locked_account_from_db(&conn, 100).unwrap(), None);
     }
 }
