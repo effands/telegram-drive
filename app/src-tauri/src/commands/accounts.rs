@@ -39,28 +39,33 @@ pub fn list_accounts_from_db(conn: &Connection) -> Result<Vec<TelegramAccount>, 
     ).map_err(|e| e.to_string())?;
 
     let mut accounts = Vec::new();
-    while let Ok(sqlite::State::Row) = stmt.next() {
-        let status_raw = stmt.read::<String, _>("status").map_err(|e| e.to_string())?;
-        let status = match status_raw.as_str() {
-            "offline" => TelegramAccountStatus::Offline,
-            "rate_limited" => TelegramAccountStatus::RateLimited,
-            "needs_login" => TelegramAccountStatus::NeedsLogin,
-            "disabled" => TelegramAccountStatus::Disabled,
-            _ => TelegramAccountStatus::Active,
-        };
-        accounts.push(TelegramAccount {
-            account_id: stmt.read::<String, _>("account_id").map_err(|e| e.to_string())?,
-            display_name: stmt.read::<String, _>("display_name").map_err(|e| e.to_string())?,
-            phone: stmt.read::<Option<String>, _>("phone").map_err(|e| e.to_string())?,
-            username: stmt.read::<Option<String>, _>("username").map_err(|e| e.to_string())?,
-            session_path: stmt.read::<String, _>("session_path").map_err(|e| e.to_string())?,
-            status,
-            is_default: stmt.read::<i64, _>("is_default").map_err(|e| e.to_string())? == 1,
-            tracked_bytes: stmt.read::<i64, _>("tracked_bytes").map_err(|e| e.to_string())?.max(0) as u64,
-            tracked_files: stmt.read::<i64, _>("tracked_files").map_err(|e| e.to_string())?.max(0) as u64,
-            last_sync_at: stmt.read::<Option<i64>, _>("last_sync_at").map_err(|e| e.to_string())?,
-            last_error: stmt.read::<Option<String>, _>("last_error").map_err(|e| e.to_string())?,
-        });
+    loop {
+        match stmt.next().map_err(|e| e.to_string())? {
+            sqlite::State::Row => {
+                let status_raw = stmt.read::<String, _>("status").map_err(|e| e.to_string())?;
+                let status = match status_raw.as_str() {
+                    "offline" => TelegramAccountStatus::Offline,
+                    "rate_limited" => TelegramAccountStatus::RateLimited,
+                    "needs_login" => TelegramAccountStatus::NeedsLogin,
+                    "disabled" => TelegramAccountStatus::Disabled,
+                    _ => TelegramAccountStatus::Active,
+                };
+                accounts.push(TelegramAccount {
+                    account_id: stmt.read::<String, _>("account_id").map_err(|e| e.to_string())?,
+                    display_name: stmt.read::<String, _>("display_name").map_err(|e| e.to_string())?,
+                    phone: stmt.read::<Option<String>, _>("phone").map_err(|e| e.to_string())?,
+                    username: stmt.read::<Option<String>, _>("username").map_err(|e| e.to_string())?,
+                    session_path: stmt.read::<String, _>("session_path").map_err(|e| e.to_string())?,
+                    status,
+                    is_default: stmt.read::<i64, _>("is_default").map_err(|e| e.to_string())? == 1,
+                    tracked_bytes: stmt.read::<i64, _>("tracked_bytes").map_err(|e| e.to_string())?.max(0) as u64,
+                    tracked_files: stmt.read::<i64, _>("tracked_files").map_err(|e| e.to_string())?.max(0) as u64,
+                    last_sync_at: stmt.read::<Option<i64>, _>("last_sync_at").map_err(|e| e.to_string())?,
+                    last_error: stmt.read::<Option<String>, _>("last_error").map_err(|e| e.to_string())?,
+                });
+            }
+            sqlite::State::Done => break,
+        }
     }
     Ok(accounts)
 }
@@ -80,6 +85,12 @@ mod tests {
         let conn = sqlite::open(":memory:").unwrap();
         conn.execute(crate::db::schema_sql()).unwrap();
         conn
+    }
+
+    fn read_string(conn: &Connection, query: &str) -> String {
+        let mut stmt = conn.prepare(query).unwrap();
+        assert_eq!(stmt.next().unwrap(), sqlite::State::Row);
+        stmt.read::<String, _>(0).unwrap()
     }
 
     #[test]
@@ -103,5 +114,27 @@ mod tests {
         let summary = account_summary_from_db(&conn).unwrap();
         assert_eq!(summary.total_bytes, 42);
         assert_eq!(summary.total_files, 2);
+    }
+
+    #[test]
+    fn migrate_default_account_assigns_existing_rows_to_default() {
+        let conn = memory_db();
+        conn.execute(
+            "INSERT INTO folder_metadata (channel_id, name) VALUES (10, 'Videos');
+             INSERT INTO shared_links
+                (id, folder_id, message_id, file_name, file_size, created_at)
+              VALUES ('share-1', 10, 99, 'clip.mp4', 123, 1);"
+        ).unwrap();
+
+        migrate_default_account(&conn, "C:/Users/RTX/session/telegram.session").unwrap();
+
+        assert_eq!(
+            read_string(&conn, "SELECT account_id FROM folder_metadata WHERE channel_id = 10"),
+            DEFAULT_ACCOUNT_ID
+        );
+        assert_eq!(
+            read_string(&conn, "SELECT account_id FROM shared_links WHERE id = 'share-1'"),
+            DEFAULT_ACCOUNT_ID
+        );
     }
 }
