@@ -23,6 +23,28 @@ fn get_upload_cancellations() -> &'static Mutex<HashMap<String, oneshot::Sender<
     UPLOAD_CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+async fn resolve_account_peer(
+    client: &grammers_client::Client,
+    folder_id: Option<i64>,
+    state: &TelegramState,
+    account_id: &str,
+) -> Result<Peer, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return resolve_peer(client, folder_id, &state.peer_cache).await;
+    }
+
+    {
+        let account_caches = state.account_peer_cache.read().await;
+        if let (Some(id), Some(cache)) = (folder_id, account_caches.get(account_id)) {
+            if let Some(peer) = cache.get(&id) {
+                return Ok(peer.clone());
+            }
+        }
+    }
+
+    resolve_peer(client, folder_id, &state.peer_cache).await
+}
+
 fn url_decode(s: &str) -> String {
     let mut result = Vec::new();
     let bytes = s.as_bytes();
@@ -800,16 +822,30 @@ async fn cmd_upload_file_inner(
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
 ) -> Result<String, String> {
-    if matches!(account_id.as_deref(), Some(id) if id != DEFAULT_ACCOUNT_ID) {
-        return Err("Additional account sessions are not connected yet".to_string());
-    }
-
     let size = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?.len();
     bw_state.try_reserve_up(size)?;
 
     let tid = transfer_id.unwrap_or_default();
+    let resolved_account_id = account_id.unwrap_or_else(|| DEFAULT_ACCOUNT_ID.to_string());
 
-    let client_opt = { state.client.lock().await.clone() };
+    let client_opt = if resolved_account_id == DEFAULT_ACCOUNT_ID {
+        state.client.lock().await.clone()
+    } else {
+        let api_id = state
+            .api_id
+            .lock()
+            .await
+            .ok_or_else(|| "No API ID configured".to_string())?;
+        Some(
+            crate::commands::auth::ensure_account_client_initialized(
+                &app_handle,
+                &state,
+                &resolved_account_id,
+                api_id,
+            )
+            .await?,
+        )
+    };
     #[cfg(debug_assertions)]
     if client_opt.is_none() {
         log::info!("[MOCK] Uploaded file {} to {:?}", path, folder_id);
@@ -916,7 +952,7 @@ async fn cmd_upload_file_inner(
     let uploaded_file = upload_result.map_err(map_error)?;
     let message = InputMessage::new().text("").file(uploaded_file);
 
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let peer = resolve_account_peer(&client, folder_id, &state, &resolved_account_id).await?;
 
     // VPN-aware retry logic for send_message
     let max_retries = net_config.retry_attempts();

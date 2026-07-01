@@ -534,6 +534,9 @@ pub fn run() {
                 runner_shutdown: Arc::new(std::sync::Mutex::new(None)),
                 runner_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                account_clients: Arc::new(Mutex::new(HashMap::new())),
+                account_runner_shutdowns: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                account_peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             });
             app.manage(Arc::new(bandwidth::BandwidthManager::new(app.handle())));
@@ -759,6 +762,12 @@ pub fn run() {
             if let Some(tx) = runner_tx {
                 log::info!("Signaling network runner shutdown...");
                 let _ = tx.send(());
+            }
+            if let Ok(mut account_runners) = app_handle.state::<TelegramState>().account_runner_shutdowns.lock() {
+                for (account_id, tx) in account_runners.drain() {
+                    log::info!("Signaling account runner shutdown for {}...", account_id);
+                    let _ = tx.send(());
+                }
             }
 
             // 2. Stop the Actix streaming server (graceful)

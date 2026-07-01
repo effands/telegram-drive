@@ -13,8 +13,29 @@ use grammers_tl_types as tl;
 
 use crate::TelegramState;
 use crate::models::{AuthResult};
+use crate::commands::accounts::DEFAULT_ACCOUNT_ID;
 use crate::commands::utils::map_error;
 use grammers_client::SignInError;
+
+pub fn session_path_for_account(
+    app_handle: &tauri::AppHandle,
+    account_id: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    match account_id {
+        Some(id) if id != DEFAULT_ACCOUNT_ID => {
+            let dir = app_data_dir.join("sessions").join(id);
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create account session dir: {}", e))?;
+            Ok(dir.join("telegram.session"))
+        }
+        _ => Ok(app_data_dir.join("telegram.session")),
+    }
+}
 
 /// Ensures the Telegram client is initialized.
 /// 
@@ -73,7 +94,7 @@ pub async fn ensure_client_initialized(
             .map_err(|e| format!("Failed to create app data dir: {}", e))?;
     }
     
-    let session_path = app_data_dir.join("telegram.session");
+    let session_path = session_path_for_account(app_handle, None)?;
     let session_path_str = session_path.to_string_lossy().to_string();
     log::info!("Opening session at: {}", session_path_str);
     
@@ -151,6 +172,61 @@ pub async fn ensure_client_initialized(
     });
     
     *client_guard = Some(client.clone());
+    Ok(client)
+}
+
+pub async fn ensure_account_client_initialized(
+    app_handle: &tauri::AppHandle,
+    state: &State<'_, TelegramState>,
+    account_id: &str,
+    api_id: i32,
+) -> Result<Client, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return ensure_client_initialized(app_handle, state, api_id).await;
+    }
+
+    let clients = state.account_clients.lock().await;
+    if let Some(client) = clients.get(account_id) {
+        return Ok(client.clone());
+    }
+    drop(clients);
+
+    let session_path = session_path_for_account(app_handle, Some(account_id))?;
+    let session_path_str = session_path.to_string_lossy().to_string();
+    log::info!("Opening account session {} at: {}", account_id, session_path_str);
+
+    let session = SqliteSession::open(&session_path_str).map_err(|e| e.to_string())?;
+    let session = Arc::new(session);
+
+    let net_config = app_handle.state::<Arc<crate::vpn_optimizer::NetworkConfig>>();
+    let mut connection_params = grammers_mtsender::ConnectionParams::default();
+    if let Some(proxy_url) = net_config.effective_proxy_url() {
+        connection_params.proxy_url = Some(proxy_url);
+    }
+
+    let pool = SenderPool::with_configuration(session, api_id, connection_params);
+    let client = Client::new(&pool);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    state
+        .account_runner_shutdowns
+        .lock()
+        .unwrap()
+        .insert(account_id.to_string(), shutdown_tx);
+
+    let SenderPool { runner, .. } = pool;
+    let runner_account_id = account_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        tokio::select! {
+            _ = runner.run() => log::info!("Account runner {} exited", runner_account_id),
+            _ = shutdown_rx => log::info!("Account runner {} shutdown requested", runner_account_id),
+        }
+    });
+
+    state
+        .account_clients
+        .lock()
+        .await
+        .insert(account_id.to_string(), client.clone());
     Ok(client)
 }
 

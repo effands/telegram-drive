@@ -25,6 +25,11 @@ pub struct TelegramState {
     /// Populated lazily on first resolve_peer call, eagerly during cmd_scan_folders.
     /// Cleared on logout.
     pub peer_cache: Arc<tokio::sync::RwLock<HashMap<i64, Peer>>>,
+    /// Additional Telegram clients keyed by app account id. The default account
+    /// remains in `client` for backward-compatible single-account behavior.
+    pub account_clients: Arc<Mutex<HashMap<String, Client>>>,
+    pub account_runner_shutdowns: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    pub account_peer_cache: Arc<tokio::sync::RwLock<HashMap<String, HashMap<i64, Peer>>>>,
     /// Set of transfer IDs that have been cancelled. Checked cooperatively
     /// in upload/download chunk loops. Cleared on logout.
     pub cancelled_transfers: Arc<tokio::sync::RwLock<HashSet<String>>>,
