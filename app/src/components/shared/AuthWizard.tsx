@@ -7,6 +7,8 @@ import { useTheme } from '../../context/ThemeContext';
 import { open } from '@tauri-apps/plugin-shell';
 import { QRCodeSVG } from 'qrcode.react';
 
+const DONATION_QR_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhut4hFJ1371v4Z-Xxd4_-ndcBaup55rpoiBgk066hJ-K1c5Lt9tgJIElFFdUL32KX7_2XRpZfgz8sAWNU8OEpr2dh_xYxkeL4I0ZQyTn76lBYAEdcfzp_WMQ9QkI8tYpagEqmJdGg9k8KzPMOBUgvqW_Ck9YR6RghxapNCkfcV7fUoAe_p3y_Ngg7BiWI/s735/photo_2026-06-16_07-23-26.jpg";
+
 type Step = "setup" | "phone" | "code" | "password";
 
 interface AuthWizardProps {
@@ -428,14 +430,14 @@ export function AuthWizard({ onLogin, mode = 'primary-login', onCancel }: AuthWi
                                 >
                                     {/* Phone / QR Toggle */}
                                     {!isMobile && (
-                                        <div className="flex rounded-xl overflow-hidden border border-white/10">
+                                        <div className="flex rounded-xl overflow-hidden border border-telegram-border bg-telegram-hover/40">
                                             <button
                                                 type="button"
                                                 onClick={() => { setLoginMethod('phone'); setQrUrl(null); setQrPolling(false); setError(null); }}
                                                 className={`flex-1 py-2.5 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
                                                     loginMethod === 'phone'
-                                                        ? 'bg-white/15 text-white'
-                                                        : 'text-white/50 hover:text-white/70'
+                                                        ? 'bg-white text-black shadow-sm'
+                                                        : 'text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover'
                                                 }`}
                                             >
                                                 <Phone className="w-4 h-4" /> Phone Number
@@ -445,8 +447,8 @@ export function AuthWizard({ onLogin, mode = 'primary-login', onCancel }: AuthWi
                                                 onClick={() => { setLoginMethod('qr'); setError(null); handleQrLogin(); }}
                                                 className={`flex-1 py-2.5 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
                                                     loginMethod === 'qr'
-                                                        ? 'bg-white/15 text-white'
-                                                        : 'text-white/50 hover:text-white/70'
+                                                        ? 'bg-white text-black shadow-sm'
+                                                        : 'text-telegram-subtext hover:text-telegram-text hover:bg-telegram-hover'
                                                 }`}
                                             >
                                                 <QrCode className="w-4 h-4" /> QR Code
@@ -735,9 +737,9 @@ export function AuthWizard({ onLogin, mode = 'primary-login', onCancel }: AuthWi
                             className="glass bg-telegram-surface border border-telegram-border rounded-2xl p-6 max-w-sm w-full shadow-2xl"
                             onClick={(e) => e.stopPropagation()}
                         >
-                            <div className="relative flex items-center justify-center mb-6">
+                            <div className="relative flex items-center justify-center mb-5">
                                 <h2 className="text-xl font-bold text-telegram-text text-center">
-                                    Support the Project
+                                    Donate
                                 </h2>
                                 <button onClick={() => setShowDonate(false)} className="absolute right-0 p-2 hover:bg-telegram-hover rounded-lg transition-colors">
                                     <X className="w-5 h-5 text-telegram-subtext" />
@@ -745,22 +747,27 @@ export function AuthWizard({ onLogin, mode = 'primary-login', onCancel }: AuthWi
                             </div>
 
                             <div className="space-y-4 text-center">
-                                <p className="text-sm text-telegram-subtext mb-6">
-                                    If you find Telegram Drive useful, consider supporting its development!
+                                <p className="text-sm text-telegram-subtext">
+                                    Scan QR di bawah ini untuk berdonasi dan ikut mendukung pengembangan Telegram Drive.
                                 </p>
 
-                                <div className="space-y-4">
-                                    <a href="#" onClick={(e) => { e.preventDefault(); open('https://www.paypal.me/Caamer20'); }} className="block hover:opacity-80 transition-opacity">
-                                        <img src="https://raw.githubusercontent.com/stefan-niedermann/paypal-donate-button/master/paypal-donate-button.png" alt="Donate with PayPal" width="200" className="mx-auto" />
-                                    </a>
+                                <div className="rounded-[1.75rem] bg-gradient-to-br from-sky-400 via-blue-500 to-cyan-300 p-[2px] shadow-[0_22px_60px_rgba(14,165,233,0.28)]">
+                                    <div className="rounded-[1.65rem] bg-white p-4">
+                                        <img
+                                            src={DONATION_QR_URL}
+                                            alt="QR code donasi Telegram Drive"
+                                            className="mx-auto w-full max-w-[260px] rounded-2xl object-cover"
+                                        />
+                                    </div>
+                                </div>
 
-                                    <a href="#" onClick={(e) => { e.preventDefault(); open('https://link.trustwallet.com/send?address=ltc1q6wkr5ac4u0pxx4hx7xgwn0gsaku25ws0df73rp&asset=c2'); }} className="block hover:opacity-80 transition-opacity">
-                                        <img src="https://img.shields.io/badge/Donate-LTC-345D9D?style=for-the-badge&logo=litecoin&logoColor=white" alt="Donate LTC" className="mx-auto h-[28px]" />
-                                    </a>
-
-                                    <a href="#" onClick={(e) => { e.preventDefault(); open('https://link.trustwallet.com/send?asset=c0&address=bc1q5pt7m2fk6w0dzsnf6vvd5k6nw5k44785286ujy'); }} className="block hover:opacity-80 transition-opacity">
-                                        <img src="https://img.shields.io/badge/Donate-BTC-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Donate BTC" className="mx-auto h-[28px]" />
-                                    </a>
+                                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3">
+                                    <p className="text-base font-semibold text-telegram-text">
+                                        Thank you telah berdonasi
+                                    </p>
+                                    <p className="mt-1 text-xs text-telegram-subtext">
+                                        Dukungan kamu membantu aplikasi ini tetap hidup, bersih, dan terus dikembangkan.
+                                    </p>
                                 </div>
                             </div>
                         </motion.div>
