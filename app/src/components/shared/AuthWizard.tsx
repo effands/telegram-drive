@@ -9,6 +9,12 @@ import { QRCodeSVG } from 'qrcode.react';
 
 type Step = "setup" | "phone" | "code" | "password";
 
+interface AuthWizardProps {
+    onLogin: () => void;
+    mode?: 'primary-login' | 'add-account';
+    onCancel?: () => void;
+}
+
 function AuthThemeToggle() {
     const { theme, toggleTheme } = useTheme();
     return (
@@ -25,7 +31,7 @@ function AuthThemeToggle() {
         </button>
     );
 }
-export function AuthWizard({ onLogin }: { onLogin: () => void }) {
+export function AuthWizard({ onLogin, mode = 'primary-login', onCancel }: AuthWizardProps) {
     const isBrowser = typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window);
 
     if (isBrowser) {
@@ -53,6 +59,7 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
 
     const [step, setStep] = useState<Step>("setup");
     const [loading, setLoading] = useState(false);
+    const [accountId, setAccountId] = useState<string | null>(null);
 
     const [apiId, setApiId] = useState("");
     const [apiHash, setApiHash] = useState("");
@@ -66,6 +73,7 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
     const [showDonate, setShowDonate] = useState(false);
     const [loginMethod, setLoginMethod] = useState<'phone' | 'qr'>('phone');
     const isMobile = typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent.toLowerCase());
+    const isAddAccount = mode === 'add-account';
 
     useEffect(() => {
         if (isMobile && loginMethod !== 'phone') {
@@ -106,6 +114,13 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
         initStore();
     }, []);
 
+    useEffect(() => {
+        if (!isAddAccount || accountId) return;
+        invoke<string>('cmd_prepare_new_account_session')
+            .then(setAccountId)
+            .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }, [isAddAccount, accountId]);
+
     const saveCredentials = async () => {
         try {
             const store = await load('config.json');
@@ -129,6 +144,10 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
             setError("Both API ID and Hash are required.");
             return;
         }
+        if (isAddAccount && !accountId) {
+            setError("Preparing the new account session. Please wait a moment.");
+            return;
+        }
         setError(null);
         await saveCredentials();
         setStep("phone");
@@ -143,10 +162,12 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
         try {
             const idInt = parseInt(apiId, 10);
             if (isNaN(idInt)) throw new Error("API ID must be a number");
+            if (isAddAccount && !accountId) throw new Error("New account session is not ready yet");
 
             const url = await invoke<string>("cmd_auth_qr_login", {
                 apiId: idInt,
-                apiHash: apiHash
+                apiHash: apiHash,
+                accountId,
             });
 
             if (url === "__authorized__") {
@@ -175,7 +196,7 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
 
         qrPollRef.current = setInterval(async () => {
             try {
-                const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_qr_poll");
+                const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_qr_poll", { accountId });
                 if (res.success) {
                     setQrPolling(false);
                     if (res.next_step === "password") {
@@ -205,11 +226,13 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
         try {
             const idInt = parseInt(apiId, 10);
             if (isNaN(idInt)) throw new Error("API ID must be a number");
+            if (isAddAccount && !accountId) throw new Error("New account session is not ready yet");
 
             await invoke("cmd_auth_request_code", {
                 phone,
                 apiId: idInt,
-                apiHash: apiHash
+                apiHash: apiHash,
+                accountId,
             });
             setStep("code");
         } catch (err: unknown) {
@@ -235,7 +258,7 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
         setLoading(true);
         setError(null);
         try {
-            const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_sign_in", { code });
+            const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_sign_in", { code, accountId });
             if (res.success) {
                 onLogin();
             } else if (res.next_step === "password") {
@@ -255,7 +278,7 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
         setLoading(true);
         setError(null);
         try {
-            const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_check_password", { password });
+            const res = await invoke<{ success: boolean; next_step?: string }>("cmd_auth_check_password", { password, accountId });
             if (res.success) {
                 onLogin();
             } else {
@@ -275,14 +298,28 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="auth-glass p-8 rounded-3xl shadow-2xl w-full max-w-md"
+                className="auth-glass p-8 rounded-3xl shadow-2xl w-full max-w-md relative"
             >
+                {onCancel && (
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className="absolute right-4 top-4 p-2 rounded-lg text-white/50 hover:text-white hover:bg-white/10"
+                        title="Cancel"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                )}
                 <div className="text-center mb-8">
                     <div className="w-20 h-20 mb-6 mx-auto flex items-center justify-center filter drop-shadow-lg">
                         <img src="/logo.svg" alt="Logo" className="w-full h-full" />
                     </div>
-                    <h1 className="text-2xl font-bold text-white mb-1 tracking-tight">Telegram Drive</h1>
-                    <p className="text-sm text-white/60 font-medium">Self-Hosted Secure Storage</p>
+                    <h1 className="text-2xl font-bold text-white mb-1 tracking-tight">
+                        {isAddAccount ? 'Add Telegram Account' : 'Telegram Drive'}
+                    </h1>
+                    <p className="text-sm text-white/60 font-medium">
+                        {isAddAccount ? 'Connect another storage account' : 'Self-Hosted Secure Storage'}
+                    </p>
                 </div>
 
                 <AnimatePresence mode="wait">

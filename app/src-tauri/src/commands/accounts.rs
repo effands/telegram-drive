@@ -12,6 +12,21 @@ pub fn current_default_session_path(app: &AppHandle) -> Result<String, String> {
     Ok(dir.join("telegram.session").to_string_lossy().to_string())
 }
 
+#[tauri::command]
+pub async fn cmd_prepare_new_account_session(
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let id = format!("acct_{}", chrono::Utc::now().timestamp_millis());
+    let dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("sessions")
+        .join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
 pub fn migrate_default_account(conn: &Connection, session_path: &str) -> Result<(), String> {
     let mut stmt = conn
         .prepare("SELECT COUNT(*) FROM telegram_accounts")
@@ -36,6 +51,35 @@ pub fn migrate_default_account(conn: &Connection, session_path: &str) -> Result<
 
     conn.execute("UPDATE folder_metadata SET account_id = 'default' WHERE account_id IS NULL").map_err(|e| e.to_string())?;
     conn.execute("UPDATE shared_links SET account_id = 'default' WHERE account_id IS NULL").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn upsert_account_after_login(
+    conn: &Connection,
+    account_id: &str,
+    display_name: &str,
+    phone: Option<&str>,
+    username: Option<&str>,
+    session_path: &str,
+) -> Result<(), String> {
+    let mut stmt = conn.prepare(
+        "INSERT INTO telegram_accounts
+         (account_id, display_name, phone, username, session_path, status, is_default)
+         VALUES (?, ?, ?, ?, ?, 'active', 0)
+         ON CONFLICT(account_id) DO UPDATE SET
+           display_name = excluded.display_name,
+           phone = excluded.phone,
+           username = excluded.username,
+           session_path = excluded.session_path,
+           status = 'active',
+           updated_at = strftime('%s','now')"
+    ).map_err(|e| e.to_string())?;
+    stmt.bind((1, account_id)).map_err(|e| e.to_string())?;
+    stmt.bind((2, display_name)).map_err(|e| e.to_string())?;
+    stmt.bind((3, phone)).map_err(|e| e.to_string())?;
+    stmt.bind((4, username)).map_err(|e| e.to_string())?;
+    stmt.bind((5, session_path)).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -748,6 +748,7 @@ pub fn run() {
             commands::cmd_account_storage_summary,
             commands::cmd_set_folder_locked_account,
             commands::cmd_preview_upload_route,
+            commands::cmd_prepare_new_account_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

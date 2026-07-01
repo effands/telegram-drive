@@ -27,6 +27,7 @@ import { RemoteUploadModal } from './dashboard/RemoteUploadModal';
 import { Link, Copy, Check, X, Loader2, Share2, Database } from 'lucide-react';
 import { StorageAccountsPanel } from './dashboard/StorageAccountsPanel';
 import { AccountFallbackDialog } from './dashboard/AccountFallbackDialog';
+import { AuthWizard } from '../shared/AuthWizard';
 
 // Hooks
 import { useTelegramConnection } from '../../hooks/useTelegramConnection';
@@ -81,6 +82,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [renameFolder, setRenameFolder] = useState<{ id: number; name: string } | null>(null);
     const [moveFileTarget, setMoveFileTarget] = useState<TelegramFile | null>(null);
     const [renameFileTarget, setRenameFileTarget] = useState<TelegramFile | null>(null);
+    const [showAddAccountWizard, setShowAddAccountWizard] = useState(false);
     const [pendingRouteDecision, setPendingRouteDecision] = useState<{
         decision: UploadRouteDecision;
         paths: string[];
@@ -714,7 +716,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
             {settings.showAccountPanel ? (
                 <StorageAccountsPanel
                     activeFolder={activeFolder}
-                    onAddAccount={() => toast.info('Add Account flow is coming in the next step')}
+                    onAddAccount={() => setShowAddAccountWizard(true)}
                     onFolderLockChanged={async () => {
                         await handleSyncFolders(true);
                         queryClient.invalidateQueries({ queryKey: ['files'] });
@@ -765,6 +767,20 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     }}
                     onCancel={() => setPendingRouteDecision(null)}
                 />
+            )}
+
+            {showAddAccountWizard && (
+                <div className="fixed inset-0 z-[300] bg-black/70">
+                    <AuthWizard
+                        mode="add-account"
+                        onCancel={() => setShowAddAccountWizard(false)}
+                        onLogin={() => {
+                            setShowAddAccountWizard(false);
+                            queryClient.invalidateQueries({ queryKey: ['telegram-accounts'] });
+                            queryClient.invalidateQueries({ queryKey: ['account-storage-summary'] });
+                        }}
+                    />
+                </div>
             )}
 
             {archiveViewFile && (

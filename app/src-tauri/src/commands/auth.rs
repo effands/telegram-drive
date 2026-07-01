@@ -13,9 +13,46 @@ use grammers_tl_types as tl;
 
 use crate::TelegramState;
 use crate::models::{AuthResult};
-use crate::commands::accounts::DEFAULT_ACCOUNT_ID;
+use crate::commands::accounts::{upsert_account_after_login, DEFAULT_ACCOUNT_ID};
 use crate::commands::utils::map_error;
+use crate::db::DbConnection;
 use grammers_client::SignInError;
+
+async fn persist_logged_in_account(
+    app_handle: &tauri::AppHandle,
+    client: &Client,
+    db_pool: &DbConnection,
+    account_id: Option<&str>,
+) -> Result<(), String> {
+    let account_id = account_id.unwrap_or(DEFAULT_ACCOUNT_ID);
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return Ok(());
+    }
+
+    let me = client.get_me().await.map_err(map_error)?;
+    let display_name = {
+        let full_name = me.full_name();
+        if !full_name.trim().is_empty() {
+            full_name
+        } else if let Some(username) = me.username() {
+            format!("@{}", username)
+        } else {
+            account_id.to_string()
+        }
+    };
+    let session_path = session_path_for_account(app_handle, Some(account_id))?
+        .to_string_lossy()
+        .to_string();
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    upsert_account_after_login(
+        &conn,
+        account_id,
+        &display_name,
+        me.phone(),
+        me.username(),
+        &session_path,
+    )
+}
 
 pub fn session_path_for_account(
     app_handle: &tauri::AppHandle,
@@ -376,6 +413,7 @@ pub async fn cmd_auth_request_code(
     phone: String,
     api_id: i32,
     api_hash: String,
+    account_id: Option<String>,
     state: State<'_, TelegramState>,
 ) -> Result<String, String> {
     
@@ -386,7 +424,13 @@ pub async fn cmd_auth_request_code(
     // Store API ID
     *state.api_id.lock().await = Some(api_id);
 
-    let client_handle = ensure_client_initialized(&app_handle, &state, api_id).await?;
+    let resolved_account_id = account_id.as_deref().unwrap_or(DEFAULT_ACCOUNT_ID);
+    let client_handle = ensure_account_client_initialized(
+        &app_handle,
+        &state,
+        resolved_account_id,
+        api_id,
+    ).await?;
     
     log::info!("Requesting code for {}", phone);
     
@@ -422,14 +466,26 @@ pub async fn cmd_auth_request_code(
 
 #[tauri::command]
 pub async fn cmd_auth_sign_in(
+    app_handle: tauri::AppHandle,
     code: String,
+    account_id: Option<String>,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<AuthResult, String> {
     log::info!("Signing in with code...");
     
-    let client = {
+    let resolved_account_id = account_id.as_deref().unwrap_or(DEFAULT_ACCOUNT_ID);
+    let client = if resolved_account_id == DEFAULT_ACCOUNT_ID {
         let guard = state.client.lock().await;
         guard.as_ref().ok_or("Client not initialized")?.clone()
+    } else {
+        state
+            .account_clients
+            .lock()
+            .await
+            .get(resolved_account_id)
+            .cloned()
+            .ok_or("Account client not initialized")?
     };
 
     let token_guard = state.login_token.lock().await;
@@ -437,6 +493,7 @@ pub async fn cmd_auth_sign_in(
 
     match client.sign_in(login_token, &code).await {
         Ok(_user) => {
+             persist_logged_in_account(&app_handle, &client, &db_pool, account_id.as_deref()).await?;
              log::info!("Successfully logged in.");
              Ok(AuthResult {
                 success: true,
@@ -463,12 +520,24 @@ pub async fn cmd_auth_sign_in(
 
 #[tauri::command]
 pub async fn cmd_auth_check_password(
+    app_handle: tauri::AppHandle,
     password: String,
+    account_id: Option<String>,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<AuthResult, String> {
-    let client = {
+    let resolved_account_id = account_id.as_deref().unwrap_or(DEFAULT_ACCOUNT_ID);
+    let client = if resolved_account_id == DEFAULT_ACCOUNT_ID {
         let guard = state.client.lock().await;
         guard.as_ref().ok_or("Client not initialized")?.clone()
+    } else {
+        state
+            .account_clients
+            .lock()
+            .await
+            .get(resolved_account_id)
+            .cloned()
+            .ok_or("Account client not initialized")?
     };
     
     let mut pw_guard = state.password_token.lock().await;
@@ -476,6 +545,7 @@ pub async fn cmd_auth_check_password(
 
     match client.check_password(pw_token, password.as_str()).await {
         Ok(_user) => {
+             persist_logged_in_account(&app_handle, &client, &db_pool, account_id.as_deref()).await?;
              log::info!("2FA Success.");
              Ok(AuthResult {
                 success: true,
@@ -494,6 +564,7 @@ pub async fn cmd_auth_qr_login(
     app_handle: tauri::AppHandle,
     api_id: i32,
     api_hash: String,
+    account_id: Option<String>,
     state: State<'_, TelegramState>,
 ) -> Result<String, String> {
     if api_hash.trim().is_empty() {
@@ -503,7 +574,13 @@ pub async fn cmd_auth_qr_login(
     // Store API ID
     *state.api_id.lock().await = Some(api_id);
 
-    let client = ensure_client_initialized(&app_handle, &state, api_id).await?;
+    let resolved_account_id = account_id.as_deref().unwrap_or(DEFAULT_ACCOUNT_ID);
+    let client = ensure_account_client_initialized(
+        &app_handle,
+        &state,
+        resolved_account_id,
+        api_id,
+    ).await?;
 
     log::info!("Requesting QR login token...");
 
@@ -544,16 +621,29 @@ pub async fn cmd_auth_qr_login(
 /// accepts the token via auth.acceptLoginToken.
 #[tauri::command]
 pub async fn cmd_auth_qr_poll(
+    app_handle: tauri::AppHandle,
+    account_id: Option<String>,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<AuthResult, String> {
-    let client = {
+    let resolved_account_id = account_id.as_deref().unwrap_or(DEFAULT_ACCOUNT_ID);
+    let client = if resolved_account_id == DEFAULT_ACCOUNT_ID {
         let guard = state.client.lock().await;
         guard.as_ref().ok_or("Client not initialized")?.clone()
+    } else {
+        state
+            .account_clients
+            .lock()
+            .await
+            .get(resolved_account_id)
+            .cloned()
+            .ok_or("Account client not initialized")?
     };
 
     // Check if the session is now authorized (user scanned QR on phone)
     match client.is_authorized().await {
         Ok(true) => {
+            persist_logged_in_account(&app_handle, &client, &db_pool, account_id.as_deref()).await?;
             log::info!("QR login: session authorized!");
             Ok(AuthResult {
                 success: true,
