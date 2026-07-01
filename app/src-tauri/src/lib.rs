@@ -741,6 +741,8 @@ pub fn run() {
             commands::cmd_assign_folder_to_group,
             commands::cmd_update_group_order,
             commands::cmd_get_groups,
+            commands::cmd_list_accounts,
+            commands::cmd_account_storage_summary,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -1,7 +1,14 @@
+use crate::db::DbConnection;
 use crate::models::{AccountStorageSummary, TelegramAccount, TelegramAccountStatus};
 use sqlite::Connection;
+use tauri::{AppHandle, Manager, State};
 
 pub const DEFAULT_ACCOUNT_ID: &str = "default";
+
+pub fn current_default_session_path(app: &AppHandle) -> Result<String, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join("telegram.session").to_string_lossy().to_string())
+}
 
 pub fn migrate_default_account(conn: &Connection, session_path: &str) -> Result<(), String> {
     let mut stmt = conn
@@ -75,6 +82,28 @@ pub fn account_summary_from_db(conn: &Connection) -> Result<AccountStorageSummar
     let total_bytes = accounts.iter().map(|a| a.tracked_bytes).sum();
     let total_files = accounts.iter().map(|a| a.tracked_files).sum();
     Ok(AccountStorageSummary { total_bytes, total_files, accounts })
+}
+
+#[tauri::command]
+pub async fn cmd_list_accounts(
+    app_handle: AppHandle,
+    db_pool: State<'_, DbConnection>,
+) -> Result<Vec<TelegramAccount>, String> {
+    let session_path = current_default_session_path(&app_handle)?;
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    migrate_default_account(&conn, &session_path)?;
+    list_accounts_from_db(&conn)
+}
+
+#[tauri::command]
+pub async fn cmd_account_storage_summary(
+    app_handle: AppHandle,
+    db_pool: State<'_, DbConnection>,
+) -> Result<AccountStorageSummary, String> {
+    let session_path = current_default_session_path(&app_handle)?;
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    migrate_default_account(&conn, &session_path)?;
+    account_summary_from_db(&conn)
 }
 
 #[cfg(test)]
