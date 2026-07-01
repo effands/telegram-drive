@@ -273,6 +273,23 @@ pub async fn cmd_preview_upload_route(
     Ok(crate::commands::account_router::choose_upload_account(&accounts, locked.as_deref()))
 }
 
+#[tauri::command]
+pub async fn cmd_sync_account_storage(
+    account_id: String,
+    db_pool: State<'_, DbConnection>,
+) -> Result<AccountStorageSummary, String> {
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    refresh_account_totals(&conn, &account_id)?;
+    let now = chrono::Utc::now().timestamp();
+    let mut stmt = conn
+        .prepare("UPDATE telegram_accounts SET last_sync_at = ?, last_error = NULL WHERE account_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, now)).map_err(|e| e.to_string())?;
+    stmt.bind((2, account_id.as_str())).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
+    account_summary_from_db(&conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

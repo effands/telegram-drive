@@ -1,5 +1,5 @@
 import { AlertTriangle, Database, PanelRightClose, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
-import { useAccountStorageSummary } from '../../../hooks/useAccounts';
+import { useAccountStorageSummary, useSyncAccountStorage } from '../../../hooks/useAccounts';
 import type { TelegramFolder } from '../../../types';
 import { formatBytes } from '../../../utils';
 import { FolderAccountLock } from './FolderAccountLock';
@@ -24,6 +24,7 @@ export function StorageAccountsPanel({
     onClose,
 }: StorageAccountsPanelProps) {
     const { data, isLoading, refetch } = useAccountStorageSummary();
+    const syncAccount = useSyncAccountStorage();
     const accounts = data?.accounts ?? [];
 
     return (
@@ -78,6 +79,16 @@ export function StorageAccountsPanel({
                             <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusTone(account.status)}`}>
                                 {account.status.replace('_', ' ')}
                             </span>
+                        </div>
+                        <div className="mt-3 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => syncAccount.mutate(account.account_id)}
+                                disabled={syncAccount.isPending}
+                                className="text-xs px-2 py-1 rounded bg-telegram-hover text-telegram-subtext hover:text-telegram-text disabled:opacity-50"
+                            >
+                                Sync
+                            </button>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                             <div className="rounded bg-telegram-hover/40 p-2">

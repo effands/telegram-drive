@@ -26,3 +26,15 @@ export function useRefreshAccountData() {
         },
     });
 }
+
+export function useSyncAccountStorage() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (accountId: string) => invoke<AccountStorageSummary>('cmd_sync_account_storage', { accountId }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['telegram-accounts'] });
+            queryClient.invalidateQueries({ queryKey: ['account-storage-summary'] });
+        },
+    });
+}
