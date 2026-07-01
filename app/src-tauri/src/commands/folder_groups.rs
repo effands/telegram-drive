@@ -32,6 +32,7 @@ pub async fn cmd_get_enriched_folders(
         folders.push(FolderMetadata {
             id: channel_id,
             parent_id: None,
+            account_id: None,
             name,
             username,
             is_public,

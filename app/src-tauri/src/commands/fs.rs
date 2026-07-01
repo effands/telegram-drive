@@ -488,6 +488,7 @@ pub async fn create_folder_inner(
         id: chat_id,
         name: name.to_string(),
         parent_id: None,
+        account_id: None,
         username: None,
         is_public: false,
         group_id: None,
@@ -512,6 +513,7 @@ pub async fn cmd_create_folder(
             id: mock_id,
             name,
             parent_id: None,
+            account_id: None,
             username: None,
             is_public: false,
             group_id: None,
@@ -1452,7 +1454,7 @@ pub async fn cmd_get_files(
                 _ => ("Unknown".to_string(), 0, None, None),
             };
             files.push(FileMetadata {
-                id: msg.id() as i64, folder_id, name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
+                id: msg.id() as i64, folder_id, account_id: None, name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
             });
         }
     }
@@ -1482,7 +1484,7 @@ fn extract_search_files(msgs: &[tl::enums::Message]) -> Vec<FileMetadata> {
                         tl::enums::Peer::Chat(c) => Some(c.chat_id),
                     };
                     files.push(FileMetadata {
-                        id: m.id as i64, folder_id, name, size,
+                        id: m.id as i64, folder_id, account_id: None, name, size,
                         mime_type: Some(mime), file_ext: ext,
                         created_at: m.date.to_string(), icon_type: "file".into()
                     });
@@ -1568,7 +1570,7 @@ pub async fn cmd_scan_folders(
                     let display_name = name.replace(" [TD]", "").replace(" [td]", "").replace("[TD]", "").replace("[td]", "").trim().to_string();
                     let username = c.raw.username.clone();
                     let is_public = username.is_some();
-                    folders.push(FolderMetadata { id, name: display_name, parent_id: None, username, is_public, group_id: None, display_order: 0 });
+                    folders.push(FolderMetadata { id, name: display_name, parent_id: None, account_id: None, username, is_public, group_id: None, display_order: 0 });
                     continue; 
                 }
 
@@ -1588,7 +1590,7 @@ pub async fn cmd_scan_folders(
                                      log::info!(" -> MATCH via About: {}", name);
                                      let username = c.raw.username.clone();
                                      let is_public = username.is_some();
-                                     folders.push(FolderMetadata { id, name: name.clone(), parent_id: None, username, is_public, group_id: None, display_order: 0 });
+                                     folders.push(FolderMetadata { id, name: name.clone(), parent_id: None, account_id: None, username, is_public, group_id: None, display_order: 0 });
                                  }
                             }
                         },
@@ -1733,6 +1735,7 @@ pub async fn cmd_toggle_folder_visibility(
             id: folder_id,
             name: "Mock Folder".to_string(),
             parent_id: None,
+            account_id: None,
             username: if make_public { desired_username } else { None },
             is_public: make_public,
             group_id: None,
@@ -1850,6 +1853,7 @@ pub async fn cmd_toggle_folder_visibility(
                 id: channel_id,
                 name: channel_name,
                 parent_id: None,
+                account_id: None,
                 username: Some(username),
                 is_public: true,
                 group_id: None,
@@ -1870,6 +1874,7 @@ pub async fn cmd_toggle_folder_visibility(
                 id: channel_id,
                 name: channel_name,
                 parent_id: None,
+                account_id: None,
                 username: None,
                 is_public: false,
                 group_id: None,
