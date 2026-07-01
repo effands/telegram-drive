@@ -38,3 +38,16 @@ export function useSyncAccountStorage() {
         },
     });
 }
+
+export function useSetAccountEnabled() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({ accountId, enabled }: { accountId: string; enabled: boolean }) =>
+            invoke<boolean>('cmd_set_account_enabled', { accountId, enabled }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['telegram-accounts'] });
+            queryClient.invalidateQueries({ queryKey: ['account-storage-summary'] });
+        },
+    });
+}

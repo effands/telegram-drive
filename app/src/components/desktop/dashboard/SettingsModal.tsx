@@ -9,6 +9,8 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGES } from '../../../i18n/languages';
 import { ShareInfo, CacheEntry, DetailedCacheInfo } from '../../../types';
+import { useAccountStorageSummary, useSetAccountEnabled } from '../../../hooks/useAccounts';
+import { formatBytes } from '../../../utils';
 import { version as appVersion } from '../../../../package.json';
 import { useTheme } from '../../../context/ThemeContext';
 import { CustomTheme, ThemeColorPalette, generateThemeId } from '../../../theme/themeEngine';
@@ -55,6 +57,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const [refreshing, setRefreshing] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [globalDomain, setGlobalDomain] = useState('');
+    const { data: accountSummary } = useAccountStorageSummary();
+    const setAccountEnabled = useSetAccountEnabled();
 
     const fetchShares = useCallback(async () => {
         setRefreshing(true);
@@ -658,6 +662,62 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            </section>
+
+                            {/* Storage Section */}
+                            <section className="space-y-3">
+                                <h3 className="text-xs font-semibold text-telegram-subtext uppercase tracking-wider flex items-center gap-2">
+                                    <Shield className="w-3.5 h-3.5" />
+                                    Accounts
+                                </h3>
+
+                                <div className="space-y-2">
+                                    {(accountSummary?.accounts ?? []).map(account => (
+                                        <div key={account.account_id} className="p-3 rounded-lg bg-telegram-hover/50">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm text-telegram-text font-medium truncate">{account.display_name}</p>
+                                                    <p className="text-xs text-telegram-subtext truncate">
+                                                        {account.username ? `@${account.username}` : account.phone || account.account_id}
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    disabled={account.is_default || setAccountEnabled.isPending}
+                                                    onClick={() => setAccountEnabled.mutate({
+                                                        accountId: account.account_id,
+                                                        enabled: account.status === 'disabled',
+                                                    })}
+                                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-telegram-bg text-telegram-subtext hover:text-telegram-text disabled:opacity-50"
+                                                >
+                                                    {account.status === 'disabled' ? 'Enable' : 'Disable'}
+                                                </button>
+                                            </div>
+                                            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                                                <div>
+                                                    <p className="text-telegram-subtext">Status</p>
+                                                    <p className="text-telegram-text">{account.status.replace('_', ' ')}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-telegram-subtext">Stored</p>
+                                                    <p className="text-telegram-text">{formatBytes(account.tracked_bytes)}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-telegram-subtext">Files</p>
+                                                    <p className="text-telegram-text">{account.tracked_files}</p>
+                                                </div>
+                                            </div>
+                                            {account.last_sync_at && (
+                                                <p className="mt-2 text-[11px] text-telegram-subtext">
+                                                    Last sync: {new Date(account.last_sync_at * 1000).toLocaleString()}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ))}
+                                    <p className="text-xs text-telegram-subtext">
+                                        Default account cannot be removed in this version.
+                                    </p>
                                 </div>
                             </section>
 

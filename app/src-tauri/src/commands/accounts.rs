@@ -303,6 +303,23 @@ pub async fn cmd_sync_account_storage(
     account_summary_from_db(&conn)
 }
 
+#[tauri::command]
+pub async fn cmd_set_account_enabled(
+    account_id: String,
+    enabled: bool,
+    db_pool: State<'_, DbConnection>,
+) -> Result<bool, String> {
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    let status = if enabled { "active" } else { "disabled" };
+    let mut stmt = conn
+        .prepare("UPDATE telegram_accounts SET status = ?, updated_at = strftime('%s','now') WHERE account_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, status)).map_err(|e| e.to_string())?;
+    stmt.bind((2, account_id.as_str())).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

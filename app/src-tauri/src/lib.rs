@@ -750,6 +750,7 @@ pub fn run() {
             commands::cmd_preview_upload_route,
             commands::cmd_prepare_new_account_session,
             commands::cmd_sync_account_storage,
+            commands::cmd_set_account_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
