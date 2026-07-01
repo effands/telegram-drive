@@ -444,11 +444,6 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
-    // The updater plugin is not supported on Android and can cause crashes
-    // (APKs are managed by the Play Store; the plugin attempts restricted FS ops).
-    #[cfg(not(target_os = "android"))]
-    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 

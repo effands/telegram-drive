@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, CheckCircle2 } from 'lucide-react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { DragDropOverlay } from './DragDropOverlay';
 
 /**
@@ -21,6 +22,17 @@ export function ExternalDropBlocker({ onFilesDropped, onUploadClick }: { onFiles
     // Use refs for values accessed inside stable event listeners
     const onFilesDroppedRef = useRef(onFilesDropped);
     onFilesDroppedRef.current = onFilesDropped;
+
+    const hasFileDrag = (dt: DataTransfer | null | undefined) => {
+        if (!dt) return false;
+
+        const typeList = Array.from((dt.types ?? []) as unknown as ArrayLike<string>);
+        if (typeList.includes('Files') || typeList.includes('application/x-moz-file')) {
+            return true;
+        }
+
+        return dt.files.length > 0;
+    };
 
     // Listen for file-dropped events emitted from Rust on_navigation handler.
     // This catches file drops on Linux window managers that bypass DOM drag events
@@ -53,47 +65,89 @@ export function ExternalDropBlocker({ onFilesDropped, onUploadClick }: { onFiles
         };
     }, []);
 
+    // Native Tauri webview drag/drop fallback.
+    // This gives us the real file paths on desktop environments where plain DOM
+    // FileList path extraction is unreliable.
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+
+        (async () => {
+            try {
+                unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+                    if (event.payload.type === 'over') {
+                        setIsDragging(true);
+                        return;
+                    }
+
+                    if (event.payload.type === 'drop') {
+                        const paths = event.payload.paths || [];
+                        setIsDragging(false);
+                        if (paths.length > 0) {
+                            onFilesDroppedRef.current?.(paths);
+                            setDroppedCount(paths.length);
+                            setShowFallback(false);
+                            setTimeout(() => setDroppedCount(null), 2000);
+                        }
+                        return;
+                    }
+
+                    setIsDragging(false);
+                });
+            } catch (e) {
+                console.warn('[ExternalDropBlocker] Native drag-drop listener unavailable:', e);
+            }
+        })();
+
+        return () => {
+            unlisten?.();
+        };
+    }, []);
+
     useEffect(() => {
         let dragEnterCount = 0;
         let hideTimeout: ReturnType<typeof setTimeout>;
         let messageTimeout: ReturnType<typeof setTimeout>;
 
         const handleDragEnter = (e: DragEvent) => {
-            if (e.dataTransfer?.types.includes('Files')) {
-                e.preventDefault();
-                e.stopPropagation();
-                dragEnterCount++;
-                setIsDragging(true);
-                clearTimeout(hideTimeout);
-            }
+            const dataTransfer = e.dataTransfer;
+            if (!dataTransfer || !hasFileDrag(dataTransfer)) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+            dragEnterCount++;
+            setIsDragging(true);
+            clearTimeout(hideTimeout);
         };
 
         const handleDragOver = (e: DragEvent) => {
-            if (e.dataTransfer?.types.includes('Files')) {
-                e.preventDefault();
-                e.stopPropagation();
-                e.dataTransfer.dropEffect = 'copy';
-                clearTimeout(hideTimeout);
-            }
+            const dataTransfer = e.dataTransfer;
+            if (!dataTransfer || !hasFileDrag(dataTransfer)) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+            dataTransfer.dropEffect = 'copy';
+            clearTimeout(hideTimeout);
         };
 
         const handleDragLeave = (e: DragEvent) => {
-            if (e.dataTransfer?.types.includes('Files')) {
-                dragEnterCount--;
-                // Only hide when truly leaving the window
-                if (dragEnterCount <= 0 &&
-                    (e.clientX <= 0 || e.clientY <= 0 ||
-                     e.clientX >= window.innerWidth || e.clientY >= window.innerHeight)) {
-                    dragEnterCount = 0;
-                    hideTimeout = setTimeout(() => {
-                        setIsDragging(false);
-                    }, 150);
-                }
+            const dataTransfer = e.dataTransfer;
+            if (!dataTransfer || !hasFileDrag(dataTransfer)) return;
+
+            dragEnterCount--;
+            // Only hide when truly leaving the window
+            if (dragEnterCount <= 0 &&
+                (e.clientX <= 0 || e.clientY <= 0 ||
+                 e.clientX >= window.innerWidth || e.clientY >= window.innerHeight)) {
+                dragEnterCount = 0;
+                hideTimeout = setTimeout(() => {
+                    setIsDragging(false);
+                }, 150);
             }
         };
 
         const handleDrop = (e: DragEvent) => {
-            if (!e.dataTransfer?.types.includes('Files')) return;
+            const dataTransfer = e.dataTransfer;
+            if (!dataTransfer || !hasFileDrag(dataTransfer)) return;
 
             e.preventDefault();
             e.stopPropagation();
@@ -102,7 +156,7 @@ export function ExternalDropBlocker({ onFilesDropped, onUploadClick }: { onFiles
             clearTimeout(hideTimeout);
             clearTimeout(messageTimeout);
 
-            const files = e.dataTransfer.files;
+            const files = Array.from(dataTransfer.files ?? []);
             const paths: string[] = [];
 
             for (let i = 0; i < files.length; i++) {
