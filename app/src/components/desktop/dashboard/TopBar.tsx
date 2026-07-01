@@ -1,4 +1,4 @@
-import { HardDrive, LayoutGrid, Sun, Moon, Settings, Share2, X, Globe } from 'lucide-react';
+import { Database, HardDrive, LayoutGrid, Sun, Moon, Settings, Share2, X, Globe } from 'lucide-react';
 import { useTheme } from '../../../context/ThemeContext';
 import { useTranslation } from 'react-i18next';
 import { useSettings } from '../../../context/SettingsContext';
@@ -20,12 +20,13 @@ interface TopBarProps {
     onSearchChange: (term: string) => void;
     onSettingsClick: () => void;
     onRemoteUploadClick: () => void;
+    onAccountsClick: () => void;
 }
 
 export function TopBar({
     currentFolderName, selectedIds, onShowMoveModal, onBulkDownload, onBulkDelete, onBulkShare,
     onDownloadFolder, onClearSelection, viewMode, setViewMode, searchTerm, onSearchChange, onSettingsClick,
-    onRemoteUploadClick
+    onRemoteUploadClick, onAccountsClick
 }: TopBarProps) {
     const { theme, toggleTheme } = useTheme();
     const { t } = useTranslation();
@@ -142,6 +143,17 @@ export function TopBar({
                 </button>
 
                 <div className="w-px h-6 bg-telegram-border mx-1"></div>
+
+                <button
+                    onClick={onAccountsClick}
+                    className="p-2 hover:bg-telegram-hover rounded-md text-telegram-subtext hover:text-telegram-text transition relative group"
+                    title="Storage Accounts"
+                >
+                    <Database className="w-5 h-5" />
+                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[10px] bg-telegram-surface border border-telegram-border px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 shadow-lg">
+                        Accounts
+                    </span>
+                </button>
 
                 <button
                     onClick={onSettingsClick}

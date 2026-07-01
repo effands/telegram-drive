@@ -24,7 +24,7 @@ import { ShareDialog } from './dashboard/ShareDialog';
 import { RenameFolderModal } from './dashboard/RenameFolderModal';
 import { RenameFileModal } from './dashboard/RenameFileModal';
 import { RemoteUploadModal } from './dashboard/RemoteUploadModal';
-import { Link, Copy, Check, X, Loader2, Share2, Database } from 'lucide-react';
+import { Link, Copy, Check, X, Loader2, Share2 } from 'lucide-react';
 import { StorageAccountsPanel } from './dashboard/StorageAccountsPanel';
 import { AccountFallbackDialog } from './dashboard/AccountFallbackDialog';
 import { AuthWizard } from '../shared/AuthWizard';
@@ -678,6 +678,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     onSearchChange={setSearchTerm}
                     onSettingsClick={() => setShowSettings(true)}
                     onRemoteUploadClick={() => setShowRemoteUpload(true)}
+                    onAccountsClick={() => updateSetting('showAccountPanel', true)}
                 />
                 {searchTerm.length > 2 && (
                     <div className="px-6 pt-4 pb-0">
@@ -713,7 +714,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 />
             </main>
 
-            {settings.showAccountPanel ? (
+            {settings.showAccountPanel && (
                 <StorageAccountsPanel
                     activeFolder={activeFolder}
                     onAddAccount={() => setShowAddAccountWizard(true)}
@@ -723,15 +724,6 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     }}
                     onClose={() => updateSetting('showAccountPanel', false)}
                 />
-            ) : (
-                <button
-                    type="button"
-                    onClick={() => updateSetting('showAccountPanel', true)}
-                    className="hidden xl:flex absolute right-4 top-4 z-20 items-center gap-2 rounded-full border border-telegram-border bg-telegram-surface/90 px-3 py-2 text-sm text-telegram-subtext shadow-lg hover:text-telegram-text hover:bg-telegram-hover"
-                >
-                    <Database className="w-4 h-4" />
-                    Accounts
-                </button>
             )}
 
             {previewFile && (

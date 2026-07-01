@@ -28,7 +28,7 @@ export function StorageAccountsPanel({
     const accounts = data?.accounts ?? [];
 
     return (
-        <aside className="hidden xl:flex w-80 shrink-0 border-l border-telegram-border bg-telegram-surface/50 flex-col">
+        <aside className="fixed right-0 top-14 bottom-0 z-40 flex w-80 max-w-[calc(100vw-1rem)] border-l border-telegram-border bg-telegram-surface shadow-2xl flex-col">
             <div className="p-4 border-b border-telegram-border flex items-center justify-between gap-3">
                 <div className="min-w-0">
                     <p className="text-xs uppercase tracking-wide text-telegram-subtext font-semibold">Storage Accounts</p>
