@@ -6,7 +6,9 @@ use grammers_tl_types as tl;
 use crate::TelegramState;
 use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
-use crate::commands::accounts::DEFAULT_ACCOUNT_ID;
+use crate::commands::accounts::{
+    delete_file_accounting, record_file_accounting, DEFAULT_ACCOUNT_ID,
+};
 use crate::commands::utils::{resolve_peer, map_error};
 use crate::vpn_optimizer::{NetworkConfig, backoff_ms};
 use crate::db::DbConnection;
@@ -773,6 +775,7 @@ pub async fn cmd_upload_file(
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<String, String> {
     let mut temp_cache_path: Option<String> = None;
 
@@ -802,6 +805,7 @@ pub async fn cmd_upload_file(
         state,
         bw_state,
         net_config,
+        db_pool,
     ).await;
 
     if let Some(ref cache_path) = temp_cache_path {
@@ -821,6 +825,7 @@ async fn cmd_upload_file_inner(
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<String, String> {
     let size = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?.len();
     bw_state.try_reserve_up(size)?;
@@ -873,6 +878,7 @@ async fn cmd_upload_file_inner(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
+    let file_name_for_record = file_name.clone();
 
     // Spawn a progress reporter task that emits events every 250ms
     let cancelled = state.cancelled_transfers.clone();
@@ -963,7 +969,18 @@ async fn cmd_upload_file_inner(
 
     for attempt in 0..=max_retries {
         match client.send_message(&peer, message.clone()).await {
-            Ok(_) => {
+            Ok(sent) => {
+                {
+                    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+                    record_file_accounting(
+                        &conn,
+                        &resolved_account_id,
+                        folder_id,
+                        sent.id() as i64,
+                        &file_name_for_record,
+                        size,
+                    )?;
+                }
                 // Bandwidth was already reserved by try_reserve_up at start
         if !tid.is_empty() {
             let _ = app_handle.emit("upload-progress", ProgressPayload {
@@ -1010,6 +1027,7 @@ pub async fn initiate_upload(
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<String, String> {
     crate::upload_service::start_foreground_service();
     cmd_upload_file(
@@ -1021,6 +1039,7 @@ pub async fn initiate_upload(
         state,
         bw_state,
         net_config,
+        db_pool,
     ).await
 }
 
@@ -1096,6 +1115,7 @@ pub async fn cmd_delete_file(
     message_id: i32,
     folder_id: Option<i64>,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<bool, String> {
     let client_opt = { state.client.lock().await.clone() };
     #[cfg(debug_assertions)]
@@ -1121,6 +1141,15 @@ pub async fn cmd_delete_file(
     }
 
     client.delete_messages(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
+    {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        delete_file_accounting(
+            &conn,
+            DEFAULT_ACCOUNT_ID,
+            folder_id,
+            message_id as i64,
+        )?;
+    }
     Ok(true)
 }
 
@@ -1467,6 +1496,7 @@ pub async fn cmd_move_files(
 pub async fn cmd_get_files(
     folder_id: Option<i64>,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<Vec<FileMetadata>, String> {
     let client_opt = { state.client.lock().await.clone() };
     #[cfg(debug_assertions)]
@@ -1476,6 +1506,20 @@ pub async fn cmd_get_files(
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
     let mut files = Vec::new();
+    let folder_account_id = match folder_id {
+        Some(id) => {
+            let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+            let mut stmt = conn
+                .prepare("SELECT account_id FROM folder_metadata WHERE channel_id = ?")
+                .map_err(|e| e.to_string())?;
+            stmt.bind((1, id)).map_err(|e| e.to_string())?;
+            match stmt.next().map_err(|e| e.to_string())? {
+                sqlite::State::Row => stmt.read::<Option<String>, _>(0).map_err(|e| e.to_string())?,
+                sqlite::State::Done => None,
+            }
+        }
+        None => Some(DEFAULT_ACCOUNT_ID.to_string()),
+    };
     
     let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
 
@@ -1499,7 +1543,7 @@ pub async fn cmd_get_files(
                 _ => ("Unknown".to_string(), 0, None, None),
             };
             files.push(FileMetadata {
-                id: msg.id() as i64, folder_id, account_id: None, name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
+                id: msg.id() as i64, folder_id, account_id: folder_account_id.clone(), name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
             });
         }
     }

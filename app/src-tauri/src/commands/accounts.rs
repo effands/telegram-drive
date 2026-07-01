@@ -130,6 +130,70 @@ pub fn account_summary_from_db(conn: &Connection) -> Result<AccountStorageSummar
     Ok(AccountStorageSummary { total_bytes, total_files, accounts })
 }
 
+pub fn record_file_accounting(
+    conn: &Connection,
+    account_id: &str,
+    folder_id: Option<i64>,
+    message_id: i64,
+    file_name: &str,
+    file_size: u64,
+) -> Result<(), String> {
+    let mut stmt = conn.prepare(
+        "INSERT INTO file_accounting (account_id, folder_id, message_id, file_name, file_size)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(account_id, folder_id, message_id) DO UPDATE SET
+           file_name = excluded.file_name,
+           file_size = excluded.file_size,
+           updated_at = strftime('%s','now')"
+    ).map_err(|e| e.to_string())?;
+    stmt.bind((1, account_id)).map_err(|e| e.to_string())?;
+    stmt.bind((2, folder_id)).map_err(|e| e.to_string())?;
+    stmt.bind((3, message_id)).map_err(|e| e.to_string())?;
+    stmt.bind((4, file_name)).map_err(|e| e.to_string())?;
+    stmt.bind((5, file_size as i64)).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
+    refresh_account_totals(conn, account_id)
+}
+
+pub fn delete_file_accounting(
+    conn: &Connection,
+    account_id: &str,
+    folder_id: Option<i64>,
+    message_id: i64,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("DELETE FROM file_accounting WHERE account_id = ? AND folder_id IS ? AND message_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, account_id)).map_err(|e| e.to_string())?;
+    stmt.bind((2, folder_id)).map_err(|e| e.to_string())?;
+    stmt.bind((3, message_id)).map_err(|e| e.to_string())?;
+    stmt.next().map_err(|e| e.to_string())?;
+    refresh_account_totals(conn, account_id)
+}
+
+pub fn refresh_account_totals(conn: &Connection, account_id: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT COALESCE(SUM(file_size), 0), COUNT(*) FROM file_accounting WHERE account_id = ?")
+        .map_err(|e| e.to_string())?;
+    stmt.bind((1, account_id)).map_err(|e| e.to_string())?;
+    let (bytes, files) = match stmt.next().map_err(|e| e.to_string())? {
+        sqlite::State::Row => (
+            stmt.read::<i64, _>(0).map_err(|e| e.to_string())?,
+            stmt.read::<i64, _>(1).map_err(|e| e.to_string())?,
+        ),
+        sqlite::State::Done => (0, 0),
+    };
+
+    let mut update = conn
+        .prepare("UPDATE telegram_accounts SET tracked_bytes = ?, tracked_files = ?, updated_at = strftime('%s','now') WHERE account_id = ?")
+        .map_err(|e| e.to_string())?;
+    update.bind((1, bytes)).map_err(|e| e.to_string())?;
+    update.bind((2, files)).map_err(|e| e.to_string())?;
+    update.bind((3, account_id)).map_err(|e| e.to_string())?;
+    update.next().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn set_folder_locked_account_in_db(
     conn: &Connection,
     folder_id: i64,

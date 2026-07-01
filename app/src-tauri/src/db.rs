@@ -64,7 +64,9 @@ pub fn schema_sql() -> &'static str {
         updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
         PRIMARY KEY(account_id, folder_id, message_id),
         FOREIGN KEY(account_id) REFERENCES telegram_accounts(account_id) ON DELETE CASCADE
-    );"
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_file_accounting_identity
+      ON file_accounting (account_id, COALESCE(folder_id, -1), message_id);"
 }
 
 pub fn init_db(app: &AppHandle) -> Result<DbConnection, String> {
