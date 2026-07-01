@@ -6,6 +6,7 @@ export interface TelegramFile {
     created_at?: string;
     type?: 'folder' | 'file'; // implied icon_type
     folder_id?: number | null;
+    account_id?: string | null;
     // Add other fields if backend sends them
 }
 
@@ -18,6 +19,8 @@ export interface TelegramFolder {
     is_public?: boolean;
     group_id?: number | null;
     display_order?: number;
+    account_id?: string | null;
+    locked_account_id?: string | null;
 }
 
 export interface FolderGroup {
@@ -45,6 +48,41 @@ export interface QueueItem {
     totalBytes?: number;
     speedBytesPerSec?: number;
     tempZipPath?: string; // Set when the upload originated from a zipped folder
+}
+
+export type TelegramAccountStatus =
+    | 'active'
+    | 'offline'
+    | 'rate_limited'
+    | 'needs_login'
+    | 'disabled';
+
+export interface TelegramAccount {
+    account_id: string;
+    display_name: string;
+    phone?: string | null;
+    username?: string | null;
+    status: TelegramAccountStatus;
+    is_default: boolean;
+    tracked_bytes: number;
+    tracked_files: number;
+    last_sync_at?: number | null;
+    last_error?: string | null;
+}
+
+export interface AccountStorageSummary {
+    total_bytes: number;
+    total_files: number;
+    accounts: TelegramAccount[];
+}
+
+export type UploadRouteStatus = 'ready' | 'needs_user_decision' | 'no_available_account';
+
+export interface UploadRouteDecision {
+    status: UploadRouteStatus;
+    account_id?: string | null;
+    reason?: string | null;
+    fallback_account_id?: string | null;
 }
 
 export interface BandwidthStats {

@@ -1,0 +1,28 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { invoke } from '@tauri-apps/api/core';
+import type { AccountStorageSummary, TelegramAccount } from '../types';
+
+export function useAccounts() {
+    return useQuery({
+        queryKey: ['telegram-accounts'],
+        queryFn: () => invoke<TelegramAccount[]>('cmd_list_accounts'),
+    });
+}
+
+export function useAccountStorageSummary() {
+    return useQuery({
+        queryKey: ['account-storage-summary'],
+        queryFn: () => invoke<AccountStorageSummary>('cmd_account_storage_summary'),
+    });
+}
+
+export function useRefreshAccountData() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['telegram-accounts'] });
+            await queryClient.invalidateQueries({ queryKey: ['account-storage-summary'] });
+        },
+    });
+}
