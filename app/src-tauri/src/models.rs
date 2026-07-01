@@ -68,6 +68,7 @@ pub struct TelegramAccount {
     pub display_name: String,
     pub phone: Option<String>,
     pub username: Option<String>,
+    #[serde(skip_serializing)]
     pub session_path: String,
     pub status: TelegramAccountStatus,
     pub is_default: bool,
@@ -130,5 +131,64 @@ mod tests {
         let value = serde_json::to_value(route).unwrap();
         assert_eq!(value["status"], "needs_user_decision");
         assert_eq!(value["fallback_account_id"], "acct_b");
+    }
+
+    #[test]
+    fn telegram_account_does_not_serialize_session_path() {
+        let account = TelegramAccount {
+            account_id: "acct_a".to_string(),
+            display_name: "Primary".to_string(),
+            phone: Some("+12025550100".to_string()),
+            username: Some("primary_user".to_string()),
+            session_path: "C:\\Users\\test\\secret.session".to_string(),
+            status: TelegramAccountStatus::Active,
+            is_default: true,
+            tracked_bytes: 1024,
+            tracked_files: 2,
+            last_sync_at: Some(1_725_000_000),
+            last_error: None,
+        };
+
+        let value = serde_json::to_value(account).unwrap();
+
+        assert_eq!(value["account_id"], "acct_a");
+        assert!(value.get("session_path").is_none());
+    }
+
+    #[test]
+    fn file_metadata_deserializes_legacy_payload_without_account_id() {
+        let json = r#"{
+            "id": 1,
+            "folder_id": null,
+            "name": "report.pdf",
+            "size": 4096,
+            "mime_type": "application/pdf",
+            "file_ext": "pdf",
+            "created_at": "2026-07-01T00:00:00Z",
+            "icon_type": "pdf"
+        }"#;
+
+        let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+
+        assert_eq!(metadata.account_id, None);
+        assert_eq!(metadata.name, "report.pdf");
+    }
+
+    #[test]
+    fn folder_metadata_deserializes_legacy_payload_without_account_id() {
+        let json = r#"{
+            "id": 7,
+            "parent_id": null,
+            "name": "Archive",
+            "username": null,
+            "is_public": false,
+            "group_id": null,
+            "display_order": 3
+        }"#;
+
+        let metadata: FolderMetadata = serde_json::from_str(json).unwrap();
+
+        assert_eq!(metadata.account_id, None);
+        assert_eq!(metadata.name, "Archive");
     }
 }
