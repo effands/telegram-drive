@@ -7,7 +7,7 @@ use crate::TelegramState;
 use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
 use crate::commands::accounts::{
-    delete_file_accounting, record_file_accounting, DEFAULT_ACCOUNT_ID,
+    account_for_folder, delete_file_accounting, record_file_accounting, DEFAULT_ACCOUNT_ID,
 };
 use crate::commands::utils::{resolve_peer, map_error};
 use crate::vpn_optimizer::{NetworkConfig, backoff_ms};
@@ -45,6 +45,28 @@ async fn resolve_account_peer(
     }
 
     resolve_peer(client, folder_id, &state.peer_cache).await
+}
+
+async fn client_for_account(
+    app_handle: &tauri::AppHandle,
+    state: &State<'_, TelegramState>,
+    account_id: &str,
+) -> Result<grammers_client::Client, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return state
+            .client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Client not connected".to_string());
+    }
+
+    let api_id = state
+        .api_id
+        .lock()
+        .await
+        .ok_or_else(|| "No API ID configured".to_string())?;
+    crate::commands::auth::ensure_account_client_initialized(app_handle, state, account_id, api_id).await
 }
 
 fn url_decode(s: &str) -> String {
@@ -1048,9 +1070,19 @@ pub async fn cmd_rename_file(
     message_id: i32,
     folder_id: Option<i64>,
     new_name: String,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<bool, String> {
-    let client_opt = { state.client.lock().await.clone() };
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client_opt = if account_id == DEFAULT_ACCOUNT_ID {
+        state.client.lock().await.clone()
+    } else {
+        Some(client_for_account(&app_handle, &state, &account_id).await?)
+    };
     #[cfg(debug_assertions)]
     if client_opt.is_none() {
         log::info!("[MOCK] Renamed message {} to {}", message_id, new_name);
@@ -1058,7 +1090,7 @@ pub async fn cmd_rename_file(
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
 
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let peer = resolve_account_peer(&client, folder_id, &state, &account_id).await?;
 
     // Verify the message exists before attempting to edit it.
     // This avoids a cryptic MESSAGE_ID_INVALID RPC error when the message
@@ -1114,10 +1146,19 @@ pub async fn cmd_rename_file(
 pub async fn cmd_delete_file(
     message_id: i32,
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
     db_pool: State<'_, DbConnection>,
 ) -> Result<bool, String> {
-    let client_opt = { state.client.lock().await.clone() };
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client_opt = if account_id == DEFAULT_ACCOUNT_ID {
+        state.client.lock().await.clone()
+    } else {
+        Some(client_for_account(&app_handle, &state, &account_id).await?)
+    };
     #[cfg(debug_assertions)]
     if client_opt.is_none() { 
          log::info!("[MOCK] Deleted message {} from folder {:?}", message_id, folder_id);
@@ -1125,7 +1166,7 @@ pub async fn cmd_delete_file(
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
 
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let peer = resolve_account_peer(&client, folder_id, &state, &account_id).await?;
 
     // Verify the message exists before attempting to delete it.
     // This avoids a cryptic MESSAGE_ID_INVALID RPC error when the message
@@ -1145,7 +1186,7 @@ pub async fn cmd_delete_file(
         let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
         delete_file_accounting(
             &conn,
-            DEFAULT_ACCOUNT_ID,
+            &account_id,
             folder_id,
             message_id as i64,
         )?;
@@ -1465,10 +1506,26 @@ pub async fn cmd_move_files(
     message_ids: Vec<i32>,
     source_folder_id: Option<i64>,
     target_folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<bool, String> {
     if source_folder_id == target_folder_id { return Ok(true); }
-    let client_opt = { state.client.lock().await.clone() };
+    let (source_account_id, target_account_id) = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        (
+            account_for_folder(&conn, source_folder_id)?,
+            account_for_folder(&conn, target_folder_id)?,
+        )
+    };
+    if source_account_id != target_account_id {
+        return Err("Moving files between different Telegram accounts is not supported in this version".to_string());
+    }
+    let client_opt = if source_account_id == DEFAULT_ACCOUNT_ID {
+        state.client.lock().await.clone()
+    } else {
+        Some(client_for_account(&app_handle, &state, &source_account_id).await?)
+    };
     #[cfg(debug_assertions)]
     if client_opt.is_none() { 
         log::info!("[MOCK] Moved msgs {:?} from {:?} to {:?}", message_ids, source_folder_id, target_folder_id);
@@ -1476,8 +1533,8 @@ pub async fn cmd_move_files(
     }
     let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
 
-    let source_peer = resolve_peer(&client, source_folder_id, &state.peer_cache).await?;
-    let target_peer = resolve_peer(&client, target_folder_id, &state.peer_cache).await?;
+    let source_peer = resolve_account_peer(&client, source_folder_id, &state, &source_account_id).await?;
+    let target_peer = resolve_account_peer(&client, target_folder_id, &state, &source_account_id).await?;
 
     match client.forward_messages(&target_peer, &message_ids, &source_peer).await {
         Ok(_) => {},

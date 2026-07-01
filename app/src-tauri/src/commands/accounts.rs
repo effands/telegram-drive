@@ -194,6 +194,19 @@ pub fn refresh_account_totals(conn: &Connection, account_id: &str) -> Result<(),
     Ok(())
 }
 
+pub fn account_for_folder(conn: &Connection, folder_id: Option<i64>) -> Result<String, String> {
+    if let Some(id) = folder_id {
+        let mut stmt = conn
+            .prepare("SELECT COALESCE(account_id, 'default') FROM folder_metadata WHERE channel_id = ?")
+            .map_err(|e| e.to_string())?;
+        stmt.bind((1, id)).map_err(|e| e.to_string())?;
+        if let sqlite::State::Row = stmt.next().map_err(|e| e.to_string())? {
+            return stmt.read::<String, _>(0).map_err(|e| e.to_string());
+        }
+    }
+    Ok(DEFAULT_ACCOUNT_ID.to_string())
+}
+
 pub fn set_folder_locked_account_in_db(
     conn: &Connection,
     folder_id: i64,
