@@ -22,6 +22,7 @@ export interface Settings {
     // ── Sidebar ─────────────────────────────────────────────
     sidebarCollapsed: boolean;
     hideGroups: boolean;
+    showAccountPanel: boolean;
 
     // ── VPN Optimizer (master toggle) ─────────────────────
     vpnMode: boolean;
@@ -73,6 +74,7 @@ const defaultSettings: Settings = {
     // Sidebar
     sidebarCollapsed: false,
     hideGroups: false,
+    showAccountPanel: true,
 
     // VPN Optimizer — off by default (preserves existing behaviour)
     vpnMode: false,

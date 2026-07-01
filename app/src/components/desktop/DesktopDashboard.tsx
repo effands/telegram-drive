@@ -24,7 +24,8 @@ import { ShareDialog } from './dashboard/ShareDialog';
 import { RenameFolderModal } from './dashboard/RenameFolderModal';
 import { RenameFileModal } from './dashboard/RenameFileModal';
 import { RemoteUploadModal } from './dashboard/RemoteUploadModal';
-import { Link, Copy, Check, X, Loader2, Share2 } from 'lucide-react';
+import { Link, Copy, Check, X, Loader2, Share2, Database } from 'lucide-react';
+import { StorageAccountsPanel } from './dashboard/StorageAccountsPanel';
 
 // Hooks
 import { useTelegramConnection } from '../../hooks/useTelegramConnection';
@@ -690,6 +691,22 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     onCardScaleChange={setCardScale}
                 />
             </main>
+
+            {settings.showAccountPanel ? (
+                <StorageAccountsPanel
+                    onAddAccount={() => toast.info('Add Account flow is coming in the next step')}
+                    onClose={() => updateSetting('showAccountPanel', false)}
+                />
+            ) : (
+                <button
+                    type="button"
+                    onClick={() => updateSetting('showAccountPanel', true)}
+                    className="hidden xl:flex absolute right-4 top-4 z-20 items-center gap-2 rounded-full border border-telegram-border bg-telegram-surface/90 px-3 py-2 text-sm text-telegram-subtext shadow-lg hover:text-telegram-text hover:bg-telegram-hover"
+                >
+                    <Database className="w-4 h-4" />
+                    Accounts
+                </button>
+            )}
 
             {previewFile && (
                 <PreviewModal
