@@ -36,7 +36,6 @@ chrono = "0.4"
 base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
-tauri-plugin-updater = "2"
 actix-web = "4"
 actix-cors = "0.7"
 actix-files = "0.6"
@@ -73,4 +72,3 @@ ndk-context = "0.1.1"
 # Embed the WebView2 bootstrapper so the app works on Windows systems
 # where the WebView2 runtime is not pre-installed (fresh installs, servers, etc.)
 webview-install-mode = "embeddir"
-

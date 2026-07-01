@@ -3,10 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthWizard } from "./components/shared/AuthWizard";
-import { AdGateway } from "./components/shared/AdGateway";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary";
-import { UpdateBanner } from "./components/shared/UpdateBanner";
-import { useUpdateCheck } from "./hooks/useUpdateCheck";
 import { usePlatform } from "./hooks/usePlatform";
 import "./App.css";
 
@@ -16,7 +13,7 @@ const DesktopDashboard = React.lazy(() => import("./components/desktop/DesktopDa
 // variables prevent Vite from resolving the module at build time.
 const MobileDashboard = React.lazy(() => import("./components/mobile/MobileDashboard.tsx"));
 
-import { Toaster, toast } from "sonner";
+import { Toaster } from "sonner";
 import { ConfirmProvider } from "./context/ConfirmContext";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { SettingsProvider } from "./context/SettingsContext";
@@ -25,12 +22,11 @@ import { useTranslation } from "react-i18next";
 
 const queryClient = new QueryClient();
 
-type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "ad-gateway";
+type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 
 function AppContent() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const { theme } = useTheme();
-  const { available, version, downloading, progress, downloadAndInstall, dismissUpdate } = useUpdateCheck();
   const { isMobile } = usePlatform();
   const { settings, updateSetting, isLoaded } = useSettings();
   const { i18n } = useTranslation();
@@ -94,13 +90,7 @@ function AppContent() {
         // Verify the session is still valid with Telegram servers
         const ok = await invoke<boolean>("cmd_check_connection");
         if (ok) {
-          // Check if user already passed the ad gateway — skip it if so
-          const gatewayPassed = await store.get<boolean>("ad_gateway_passed");
-          if (gatewayPassed) {
-            setAuthStatus("authenticated");
-          } else {
-            setAuthStatus("ad-gateway");
-          }
+          setAuthStatus("authenticated");
         } else {
           setAuthStatus("unauthenticated");
         }
@@ -120,35 +110,6 @@ function AppContent() {
 
     checkSession();
   }, []);
-
-  // Show thank-you toast when user enters the app after clicking the ad
-  useEffect(() => {
-    if (authStatus !== "authenticated") return;
-
-    const showThanks = async () => {
-      try {
-        const store = await load("config.json");
-        const shouldThank = await store.get<boolean>("ad_click_thanks");
-        if (shouldThank) {
-          await store.delete("ad_click_thanks");
-          await store.save();
-          toast.success("Thanks for your support! ", {
-            duration: 3000,
-            style: {
-              background: "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.1)",
-            },
-          });
-        }
-      } catch {
-        // Non-critical
-      }
-    };
-
-    // Small delay to let the dashboard finish mounting
-    const timer = setTimeout(showThanks, 600);
-    return () => clearTimeout(timer);
-  }, [authStatus]);
 
   // Clean up PDF preview cache files on close/beforeunload
   useEffect(() => {
@@ -177,18 +138,7 @@ function AppContent() {
 
   return (
     <main className="absolute inset-0 text-telegram-text overflow-hidden selection:bg-telegram-primary/30">
-      <UpdateBanner
-        available={available}
-        version={version}
-        downloading={downloading}
-        progress={progress}
-        onUpdate={downloadAndInstall}
-        onDismiss={dismissUpdate}
-      />
       <Toaster theme={theme} position="bottom-center" />
-      {authStatus === "ad-gateway" && (
-        <AdGateway onContinue={() => setAuthStatus("authenticated")} />
-      )}
       {authStatus === "authenticated" && (
         <Suspense fallback={
           <div className="h-screen w-screen flex flex-col items-center justify-center bg-telegram-bg">
@@ -207,7 +157,7 @@ function AppContent() {
         </Suspense>
       )}
       {authStatus === "unauthenticated" && (
-        <AuthWizard onLogin={() => setAuthStatus("ad-gateway")} />
+        <AuthWizard onLogin={() => setAuthStatus("authenticated")} />
       )}
     </main>
   );

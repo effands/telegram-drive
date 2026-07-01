@@ -36,11 +36,16 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
                 </div>
                 <h1 className="text-2xl font-bold text-white mb-4">Desktop App Required</h1>
                 <p className="text-gray-400 mb-6 leading-relaxed">
-                    You are viewing the internal development server in a browser.
-                    This application cannot function here because it requires access to the system backend (Rust).
+                    You opened the development server in a browser, but Telegram Drive needs the desktop app to work.
+                    The Rust backend, local storage, and Telegram session handling only run inside the desktop window.
                 </p>
-                <div className="p-4 bg-gray-800 rounded-xl border border-gray-700 text-sm text-gray-300">
-                    Please open the <strong>Telegram Drive</strong> window in your OS taskbar/dock to continue.
+                <div className="p-4 bg-gray-800 rounded-xl border border-gray-700 text-sm text-gray-300 space-y-2">
+                    <p>
+                        Use the desktop shortcut named <strong>Start Telegram Drive Localhost</strong> on your desktop.
+                    </p>
+                    <p>
+                        If the app is already running, switch to the <strong>Telegram Drive</strong> window from the taskbar.
+                    </p>
                 </div>
             </div>
         )
