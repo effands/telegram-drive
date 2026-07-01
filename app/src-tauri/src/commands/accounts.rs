@@ -1,5 +1,7 @@
 use crate::db::DbConnection;
-use crate::models::{AccountStorageSummary, TelegramAccount, TelegramAccountStatus};
+use crate::models::{
+    AccountStorageSummary, TelegramAccount, TelegramAccountStatus, UploadRouteDecision,
+};
 use sqlite::Connection;
 use tauri::{AppHandle, Manager, State};
 
@@ -144,6 +146,23 @@ pub async fn cmd_set_folder_locked_account(
     let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
     set_folder_locked_account_in_db(&conn, folder_id, account_id.as_deref())?;
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn cmd_preview_upload_route(
+    app_handle: AppHandle,
+    folder_id: Option<i64>,
+    db_pool: State<'_, DbConnection>,
+) -> Result<UploadRouteDecision, String> {
+    let session_path = current_default_session_path(&app_handle)?;
+    let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+    migrate_default_account(&conn, &session_path)?;
+    let accounts = list_accounts_from_db(&conn)?;
+    let locked = match folder_id {
+        Some(id) => get_folder_locked_account_from_db(&conn, id)?,
+        None => None,
+    };
+    Ok(crate::commands::account_router::choose_upload_account(&accounts, locked.as_deref()))
 }
 
 #[cfg(test)]

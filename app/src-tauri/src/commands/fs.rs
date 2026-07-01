@@ -6,6 +6,7 @@ use grammers_tl_types as tl;
 use crate::TelegramState;
 use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
+use crate::commands::accounts::DEFAULT_ACCOUNT_ID;
 use crate::commands::utils::{resolve_peer, map_error};
 use crate::vpn_optimizer::{NetworkConfig, backoff_ms};
 use crate::db::DbConnection;
@@ -745,6 +746,7 @@ pub async fn cmd_upload_file(
     mut path: String,
     folder_id: Option<i64>,
     transfer_id: Option<String>,
+    account_id: Option<String>,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
@@ -773,6 +775,7 @@ pub async fn cmd_upload_file(
         path.clone(),
         folder_id,
         transfer_id,
+        account_id,
         app_handle,
         state,
         bw_state,
@@ -791,11 +794,15 @@ async fn cmd_upload_file_inner(
     path: String,
     folder_id: Option<i64>,
     transfer_id: Option<String>,
+    account_id: Option<String>,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
 ) -> Result<String, String> {
+    if matches!(account_id.as_deref(), Some(id) if id != DEFAULT_ACCOUNT_ID) {
+        return Err("Additional account sessions are not connected yet".to_string());
+    }
 
     let size = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?.len();
     bw_state.try_reserve_up(size)?;
@@ -962,6 +969,7 @@ pub async fn initiate_upload(
     path: String,
     folder_id: Option<i64>,
     transfer_id: Option<String>,
+    account_id: Option<String>,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
@@ -972,6 +980,7 @@ pub async fn initiate_upload(
         path,
         folder_id,
         transfer_id,
+        account_id,
         app_handle,
         state,
         bw_state,

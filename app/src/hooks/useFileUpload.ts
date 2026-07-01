@@ -4,7 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { QueueItem } from '../types';
+import { QueueItem, UploadRouteDecision } from '../types';
 import { isAndroidPlatform, showFileDialogFallback, pickWithFallback } from '../utils';
 import { useSettings } from '../context/SettingsContext';
 import type { Store } from '@tauri-apps/plugin-store';
@@ -26,7 +26,11 @@ interface RemoteProgressPayload {
     total_bytes: number;
 }
 
-export function useFileUpload(activeFolderId: number | null, store: Store | null) {
+export function useFileUpload(
+    activeFolderId: number | null,
+    store: Store | null,
+    onRouteDecisionNeeded?: (decision: UploadRouteDecision, paths: string[]) => void,
+) {
     const queryClient = useQueryClient();
     const { settings } = useSettings();
     const [uploadQueue, setUploadQueue] = useState<QueueItem[]>([]);
@@ -132,7 +136,12 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
             if (item.url) {
                 await invoke('cmd_upload_from_url', { url: item.url, folderId: item.folderId, transferId: item.id });
             } else {
-                await invoke('cmd_upload_file', { path: item.path, folderId: item.folderId, transferId: item.id });
+                await invoke('cmd_upload_file', {
+                    path: item.path,
+                    folderId: item.folderId,
+                    transferId: item.id,
+                    accountId: item.accountId ?? null,
+                });
             }
             // Check if cancelled during upload
             if (cancelledRef.current.has(item.id)) {
@@ -167,16 +176,39 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
     };
 
     /** Queues a set of file paths for upload */
-    const queueFiles = (paths: string[]) => {
+    const queueFilesWithAccount = (paths: string[], accountId?: string | null, routeDecision?: UploadRouteDecision) => {
         if (!paths || paths.length === 0) return;
         const newItems: QueueItem[] = paths.map((path: string) => ({
             id: Math.random().toString(36).substr(2, 9),
             path,
             folderId: activeFolderId,
+            accountId: accountId ?? null,
+            routeDecision,
             status: 'pending' as const,
         }));
         setUploadQueue(prev => [...prev, ...newItems]);
         toast.info(`Queued ${paths.length} file${paths.length !== 1 ? 's' : ''} for upload`);
+    };
+
+    /** Queues a set of file paths for upload after checking account routing */
+    const queueFiles = async (paths: string[]) => {
+        if (!paths || paths.length === 0) return;
+        try {
+            const route = await invoke<UploadRouteDecision>('cmd_preview_upload_route', {
+                folderId: activeFolderId,
+            });
+            if (route.status === 'ready') {
+                queueFilesWithAccount(paths, route.account_id ?? null, route);
+                return;
+            }
+            if (route.status === 'needs_user_decision') {
+                onRouteDecisionNeeded?.(route, paths);
+                return;
+            }
+            toast.error(route.reason || 'No Telegram account is available for upload');
+        } catch (e) {
+            toast.error(`Unable to choose upload account: ${e}`);
+        }
     };
 
     const handleManualUpload = async () => {
@@ -196,7 +228,7 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
             },
         );
         if (paths && paths.length > 0) {
-            queueFiles(paths);
+            await queueFiles(paths);
         }
     };
 
@@ -241,6 +273,7 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
                     id: Math.random().toString(36).substr(2, 9),
                     path: zipPath,
                     folderId: activeFolderId,
+                    accountId: null,
                     status: 'pending',
                     tempZipPath: zipPath,
                 };
@@ -322,5 +355,6 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
         cancelAll,
         cancelItem,
         retryItem,
+        queueFilesWithAccount,
     };
 }

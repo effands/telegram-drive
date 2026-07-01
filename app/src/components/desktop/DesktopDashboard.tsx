@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 
-import { TelegramFile, BandwidthStats, ShareInfo } from '../../types';
+import { TelegramFile, BandwidthStats, ShareInfo, UploadRouteDecision } from '../../types';
 import { formatBytes, isMediaFile, isPdfFile, isArchiveFile, nativeShareOrCopy, copyToClipboard } from '../../utils';
 
 // Components
@@ -26,6 +26,7 @@ import { RenameFileModal } from './dashboard/RenameFileModal';
 import { RemoteUploadModal } from './dashboard/RemoteUploadModal';
 import { Link, Copy, Check, X, Loader2, Share2, Database } from 'lucide-react';
 import { StorageAccountsPanel } from './dashboard/StorageAccountsPanel';
+import { AccountFallbackDialog } from './dashboard/AccountFallbackDialog';
 
 // Hooks
 import { useTelegramConnection } from '../../hooks/useTelegramConnection';
@@ -80,6 +81,10 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     const [renameFolder, setRenameFolder] = useState<{ id: number; name: string } | null>(null);
     const [moveFileTarget, setMoveFileTarget] = useState<TelegramFile | null>(null);
     const [renameFileTarget, setRenameFileTarget] = useState<TelegramFile | null>(null);
+    const [pendingRouteDecision, setPendingRouteDecision] = useState<{
+        decision: UploadRouteDecision;
+        paths: string[];
+    } | null>(null);
 
     const { data: allFiles = [], isLoading, error } = useQuery({
         queryKey: ['files', activeFolderId],
@@ -104,7 +109,20 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
     });
 
 
-    const { uploadQueue, setUploadQueue, handleManualUpload, handleFolderUpload, handleDropUpload, handleUrlUpload, cancelAll: cancelUploads, cancelItem: cancelUploadItem, retryItem: retryUploadItem } = useFileUpload(activeFolderId, store);
+    const {
+        uploadQueue,
+        setUploadQueue,
+        handleManualUpload,
+        handleFolderUpload,
+        handleDropUpload,
+        handleUrlUpload,
+        cancelAll: cancelUploads,
+        cancelItem: cancelUploadItem,
+        retryItem: retryUploadItem,
+        queueFilesWithAccount,
+    } = useFileUpload(activeFolderId, store, (decision, paths) => {
+        setPendingRouteDecision({ decision, paths });
+    });
     const { downloadQueue, queueDownload, queueBulkDownload, clearFinished: clearDownloads, cancelAll: cancelDownloads, cancelItem: cancelDownloadItem, retryItem: retryDownloadItem } = useFileDownload(store);
 
     const {
@@ -725,6 +743,27 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                     totalItems={previewContextFiles.length}
                     nextFile={previewNeighbors.nextFile}
                     prevFile={previewNeighbors.prevFile}
+                />
+            )}
+
+            {pendingRouteDecision && (
+                <AccountFallbackDialog
+                    decision={pendingRouteDecision.decision}
+                    count={pendingRouteDecision.paths.length}
+                    onRetry={() => {
+                        const retry = pendingRouteDecision;
+                        setPendingRouteDecision(null);
+                        handleDropUpload(retry.paths);
+                    }}
+                    onUseFallback={() => {
+                        queueFilesWithAccount(
+                            pendingRouteDecision.paths,
+                            pendingRouteDecision.decision.fallback_account_id ?? null,
+                            pendingRouteDecision.decision,
+                        );
+                        setPendingRouteDecision(null);
+                    }}
+                    onCancel={() => setPendingRouteDecision(null)}
                 />
             )}
 

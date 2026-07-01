@@ -48,6 +48,8 @@ export interface QueueItem {
     totalBytes?: number;
     speedBytesPerSec?: number;
     tempZipPath?: string; // Set when the upload originated from a zipped folder
+    accountId?: string | null;
+    routeDecision?: UploadRouteDecision;
 }
 
 export type TelegramAccountStatus =
