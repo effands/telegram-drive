@@ -1,8 +1,10 @@
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder, cookie::Cookie};
 use crate::commands::TelegramState;
+use crate::commands::accounts::DEFAULT_ACCOUNT_ID;
 use crate::commands::utils::resolve_peer;
 use crate::db::DbConnection;
-use grammers_client::types::Media;
+use grammers_client::{Client};
+use grammers_client::types::{Media, Peer};
 use sha2::{Sha256, Digest};
 use std::sync::Arc;
 use serde::Deserialize;
@@ -18,6 +20,7 @@ struct SharedLinkRow {
     _password_salt: Option<String>,
     expires_at: Option<i64>,
     revoked: bool,
+    account_id: String,
 }
 
 #[derive(Deserialize)]
@@ -41,7 +44,7 @@ fn get_share_by_token(db: &DbConnection, token: &str) -> Result<Option<SharedLin
     let conn = db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, folder_id, message_id, file_name, file_size, password_hash, password_salt, expires_at, revoked 
+            "SELECT id, folder_id, message_id, file_name, file_size, password_hash, password_salt, expires_at, revoked, account_id 
              FROM shared_links WHERE id = ?"
         )
         .map_err(|e| e.to_string())?;
@@ -58,6 +61,11 @@ fn get_share_by_token(db: &DbConnection, token: &str) -> Result<Option<SharedLin
         let _password_salt = stmt.read::<Option<String>, _>("password_salt").ok().flatten();
         let expires_at = stmt.read::<Option<i64>, _>("expires_at").ok().flatten();
         let revoked = stmt.read::<i64, _>("revoked").map_err(|e| e.to_string())? != 0;
+        let account_id = stmt
+            .read::<Option<String>, _>("account_id")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| DEFAULT_ACCOUNT_ID.to_string());
 
         Ok(Some(SharedLinkRow {
             _id: id,
@@ -69,10 +77,63 @@ fn get_share_by_token(db: &DbConnection, token: &str) -> Result<Option<SharedLin
             _password_salt,
             expires_at,
             revoked,
+            account_id,
         }))
     } else {
         Ok(None)
     }
+}
+
+async fn client_for_share(
+    tg_state: &TelegramState,
+    account_id: &str,
+) -> Result<Client, HttpResponse> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return tg_state
+            .client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| HttpResponse::ServiceUnavailable().body("Telegram client is not connected"));
+    }
+
+    tg_state
+        .account_clients
+        .lock()
+        .await
+        .get(account_id)
+        .cloned()
+        .ok_or_else(|| HttpResponse::ServiceUnavailable().body("Telegram account is not connected"))
+}
+
+async fn resolve_share_peer(
+    client: &Client,
+    folder_id: Option<i64>,
+    account_id: &str,
+    tg_state: &TelegramState,
+) -> Result<Peer, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return resolve_peer(client, folder_id, &tg_state.peer_cache).await;
+    }
+
+    {
+        let account_caches = tg_state.account_peer_cache.read().await;
+        if let (Some(id), Some(cache)) = (folder_id, account_caches.get(account_id)) {
+            if let Some(peer) = cache.get(&id) {
+                return Ok(peer.clone());
+            }
+        }
+    }
+
+    let peer = resolve_peer(client, folder_id, &tg_state.peer_cache).await?;
+    if let Some(id) = folder_id {
+        let mut account_caches = tg_state.account_peer_cache.write().await;
+        account_caches
+            .entry(account_id.to_string())
+            .or_default()
+            .insert(id, peer.clone());
+    }
+    Ok(peer)
 }
 
 /// Renders the password entry form for protected share links.
@@ -227,13 +288,12 @@ async fn get_shared_file(
     }
     
     // Retrieve and stream the file from Telegram
-    let client_opt = { tg_state.client.lock().await.clone() };
-    let client = match client_opt {
-        Some(c) => c,
-        None => return HttpResponse::ServiceUnavailable().body("Telegram client is not connected"),
+    let client = match client_for_share(&tg_state, &row.account_id).await {
+        Ok(c) => c,
+        Err(response) => return response,
     };
     
-    let peer = match resolve_peer(&client, row.folder_id, &tg_state.peer_cache).await {
+    let peer = match resolve_share_peer(&client, row.folder_id, &row.account_id, &tg_state).await {
         Ok(p) => p,
         Err(e) => {
             log::error!("Failed to resolve peer for share: {}", e);

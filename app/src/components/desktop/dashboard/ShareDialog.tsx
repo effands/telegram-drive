@@ -43,10 +43,11 @@ export function ShareDialog({ file, onClose }: ShareDialogProps) {
             const pwdParam = requirePassword && password.trim() ? password : null;
 
             const res = await invoke<ShareInfo>('cmd_create_share', {
-                folderId: null, // Always file-level for now
+                folderId: file.folder_id ?? null,
                 messageId: file.id, // In Telegram Drive, file.id is the message id
                 fileName: file.name,
                 fileSize: file.size,
+                accountId: file.account_id ?? null,
                 password: pwdParam,
                 expiryHours,
             });

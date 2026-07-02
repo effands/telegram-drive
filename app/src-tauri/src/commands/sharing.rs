@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::State;
 use rand::Rng;
 use crate::db::DbConnection;
+use crate::commands::accounts::{account_for_folder, DEFAULT_ACCOUNT_ID};
 
 #[derive(Debug, Serialize)]
 pub struct ShareInfo {
@@ -32,6 +33,7 @@ pub async fn cmd_create_share(
     message_id: i32,
     file_name: String,
     file_size: i64,
+    account_id: Option<String>,
     password: Option<String>,
     expiry_hours: Option<i64>,
     db_pool: State<'_, DbConnection>,
@@ -53,10 +55,14 @@ pub async fn cmd_create_share(
     };
 
     let conn = db_pool.lock().map_err(|e| e.to_string())?;
+    let resolved_account_id = match account_id {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => account_for_folder(&conn, folder_id).unwrap_or_else(|_| DEFAULT_ACCOUNT_ID.to_string()),
+    };
     
     let mut stmt = conn.prepare(
-        "INSERT INTO shared_links (id, folder_id, message_id, file_name, file_size, password_hash, password_salt, expires_at, revoked, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"
+        "INSERT INTO shared_links (id, folder_id, message_id, file_name, file_size, password_hash, password_salt, expires_at, revoked, created_at, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)"
     ).map_err(|e| e.to_string())?;
 
     stmt.bind((1, token.as_str())).map_err(|e| e.to_string())?;
@@ -68,6 +74,7 @@ pub async fn cmd_create_share(
     stmt.bind::<(usize, Option<&str>)>((7, None)).map_err(|e| e.to_string())?;
     stmt.bind((8, expires_at)).map_err(|e| e.to_string())?;
     stmt.bind((9, created_at)).map_err(|e| e.to_string())?;
+    stmt.bind((10, resolved_account_id.as_str())).map_err(|e| e.to_string())?;
 
     stmt.next().map_err(|e| e.to_string())?;
 

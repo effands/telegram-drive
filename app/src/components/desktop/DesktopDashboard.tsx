@@ -90,7 +90,7 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
 
     const { data: allFiles = [], isLoading, error } = useQuery({
         queryKey: ['files', activeFolderId],
-        queryFn: () => invoke<Array<{ id: number; name: string; size: number; icon_type: string; folder_id: number | null; created_at: string; mime_type?: string; file_ext?: string }>>('cmd_get_files', { folderId: activeFolderId }).then(res => res.map(f => ({
+        queryFn: () => invoke<Array<{ id: number; name: string; size: number; icon_type: string; folder_id: number | null; account_id?: string | null; created_at: string; mime_type?: string; file_ext?: string }>>('cmd_get_files', { folderId: activeFolderId }).then(res => res.map(f => ({
             ...f,
             sizeStr: formatBytes(f.size),
             type: (f.icon_type as TelegramFile['type']) || 'file'
@@ -148,10 +148,11 @@ export function Dashboard({ onLogout }: { onLogout: () => void }) {
                 shareFiles.map(async (file) => {
                     try {
                         const info = await invoke<ShareInfo>('cmd_create_share', {
-                            folderId: null,
+                            folderId: file.folder_id ?? activeFolderId ?? null,
                             messageId: file.id,
                             fileName: file.name,
                             fileSize: file.size,
+                            accountId: file.account_id ?? null,
                             password: null,
                             expiryHours: 24,
                         });

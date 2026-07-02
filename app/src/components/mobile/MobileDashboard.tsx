@@ -361,10 +361,11 @@ export default function MobileDashboard({ onLogout }: { onLogout?: () => void })
         shareFiles.map(async (file) => {
           try {
             const info = await invoke<ShareInfo>('cmd_create_share', {
-              folderId: null,
+              folderId: file.folder_id ?? activeFolderId ?? null,
               messageId: file.id,
               fileName: file.name,
               fileSize: file.size,
+              accountId: file.account_id ?? null,
               password: null,
               expiryHours: 24, // default 1 day
             });
