@@ -4,7 +4,8 @@ use serde::Serialize;
 use tauri::State;
 use tokio::io::AsyncWriteExt;
 use crate::commands::TelegramState;
-use crate::commands::utils::resolve_peer;
+use crate::commands::accounts::{account_for_folder, load_account_client_with_init, resolve_peer_for_account};
+use crate::db::DbConnection;
 use crate::vpn_optimizer::NetworkConfig;
 use grammers_client::types::Media;
 
@@ -55,11 +56,13 @@ fn generate_unique_temp_prefix(label: &str) -> String {
 pub async fn cmd_list_archive_contents(
     message_id: i32,
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
     net_config: State<'_, Arc<NetworkConfig>>,
 ) -> Result<Vec<ArchiveEntry>, String> {
     let (client, media, filename, max_bytes) =
-        prepare_archive_operation(message_id, folder_id, &state, &net_config).await?;
+        prepare_archive_operation(message_id, folder_id, &app_handle, &state, &db_pool, &net_config).await?;
     let archive_type = detect_archive_type(&filename);
 
     match archive_type {
@@ -76,11 +79,13 @@ pub async fn cmd_extract_archive_entry(
     message_id: i32,
     folder_id: Option<i64>,
     entry_index: usize,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
     net_config: State<'_, Arc<NetworkConfig>>,
 ) -> Result<ExtractedFile, String> {
     let (client, media, filename, max_bytes) =
-        prepare_archive_operation(message_id, folder_id, &state, &net_config).await?;
+        prepare_archive_operation(message_id, folder_id, &app_handle, &state, &db_pool, &net_config).await?;
     let archive_type = detect_archive_type(&filename);
 
     match archive_type {
@@ -95,16 +100,18 @@ pub async fn cmd_extract_archive_entry(
 async fn prepare_archive_operation(
     message_id: i32,
     folder_id: Option<i64>,
-    state: &TelegramState,
+    app_handle: &tauri::AppHandle,
+    state: &State<'_, TelegramState>,
+    db_pool: &DbConnection,
     net_config: &Arc<NetworkConfig>,
 ) -> Result<(grammers_client::Client, Media, String, u64), String> {
-    let client_opt = { state.client.lock().await.clone() };
-    let client = match client_opt {
-        Some(c) => c,
-        None => return Err("Telegram client is not connected".to_string()),
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
     };
+    let client = load_account_client_with_init(app_handle, state, &account_id).await?;
 
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache)
+    let peer = resolve_peer_for_account(&client, folder_id, state.inner(), &account_id)
         .await
         .map_err(|e| format!("Failed to resolve peer: {}", e))?;
 

@@ -4,15 +4,17 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::io::{AsyncRead, AsyncWriteExt};
 use actix_web::web::Bytes;
 use std::task::{Context, Poll};
+use crate::commands::accounts::{account_for_folder, load_account_client_cached, resolve_peer_for_account};
 use crate::commands::TelegramState;
 use crate::commands::utils::{resolve_peer, map_error};
 use crate::commands::{create_folder_inner, delete_folder_inner, rename_folder_inner};
+use crate::db::DbConnection;
 use crate::commands::preview::THUMBNAIL_EXTS;
 use crate::models::FolderMetadata;
 use crate::bandwidth::BandwidthManager;
 use crate::vpn_optimizer::NetworkConfig;
 use grammers_client::types::{Media, Peer};
-use grammers_client::InputMessage;
+use grammers_client::{Client, InputMessage};
 use grammers_tl_types as tl;
 use serde::Serialize;
 use std::sync::Arc;
@@ -468,6 +470,29 @@ struct FolderQuery {
     folder_id: Option<i64>,
 }
 
+async fn api_client_and_peer_for_folder(
+    tg_state: &web::Data<Arc<TelegramState>>,
+    db_conn: &web::Data<DbConnection>,
+    folder_id: Option<i64>,
+) -> Result<(Client, Peer, String), HttpResponse> {
+    let account_id = {
+        let conn = db_conn
+            .lock()
+            .map_err(|_| json_error("DB_ERROR", "Database lock is poisoned", 500))?;
+        account_for_folder(&conn, folder_id)
+            .map_err(|e| json_error("ACCOUNT_ERROR", &e, 500))?
+    };
+    let state = tg_state.get_ref().as_ref();
+    let client = load_account_client_cached(state, &account_id)
+        .await
+        .map_err(|e| json_error("NOT_CONNECTED", &e, 503))?;
+    let peer = resolve_peer_for_account(&client, folder_id, state, &account_id)
+        .await
+        .map_err(|e| json_error("PEER_ERROR", &e, 400))?;
+
+    Ok((client, peer, account_id))
+}
+
 #[get("/api/v1/files/{message_id}")]
 async fn api_get_file(
     req: HttpRequest,
@@ -475,21 +500,16 @@ async fn api_get_file(
     query: web::Query<FolderQuery>,
     tg_state: web::Data<Arc<TelegramState>>,
     api_state: web::Data<ApiState>,
+    db_conn: web::Data<DbConnection>,
 ) -> impl Responder {
     if let Err(e) = check_auth(&req, &api_state) {
         return e;
     }
 
     let message_id = path.into_inner() as i32;
-    let client_opt = { tg_state.client.lock().await.clone() };
-    let client = match client_opt {
-        Some(c) => c,
-        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
-    };
-
-    let peer = match resolve_peer(&client, query.folder_id, &tg_state.peer_cache).await {
-        Ok(p) => p,
-        Err(e) => return json_error("PEER_ERROR", &e, 400),
+    let (client, peer, _) = match api_client_and_peer_for_folder(&tg_state, &db_conn, query.folder_id).await {
+        Ok(resolved) => resolved,
+        Err(resp) => return resp,
     };
 
     match client.get_messages_by_id(peer, &[message_id]).await {
@@ -529,21 +549,16 @@ async fn api_download_file(
     query: web::Query<FolderQuery>,
     tg_state: web::Data<Arc<TelegramState>>,
     api_state: web::Data<ApiState>,
+    db_conn: web::Data<DbConnection>,
 ) -> impl Responder {
     if let Err(e) = check_auth(&req, &api_state) {
         return e;
     }
 
     let message_id = path.into_inner() as i32;
-    let client_opt = { tg_state.client.lock().await.clone() };
-    let client = match client_opt {
-        Some(c) => c,
-        None => return json_error("NOT_CONNECTED", "Telegram client is not connected", 503),
-    };
-
-    let peer = match resolve_peer(&client, query.folder_id, &tg_state.peer_cache).await {
-        Ok(p) => p,
-        Err(e) => return json_error("PEER_ERROR", &e, 400),
+    let (client, peer, _) = match api_client_and_peer_for_folder(&tg_state, &db_conn, query.folder_id).await {
+        Ok(resolved) => resolved,
+        Err(resp) => return resp,
     };
 
     match client.get_messages_by_id(peer, &[message_id]).await {

@@ -2,6 +2,9 @@ use crate::db::DbConnection;
 use crate::models::{
     AccountStorageSummary, TelegramAccount, TelegramAccountStatus, UploadRouteDecision,
 };
+use crate::commands::TelegramState;
+use grammers_client::{Client};
+use grammers_client::types::Peer;
 use sqlite::Connection;
 use tauri::{AppHandle, Manager, State};
 
@@ -205,6 +208,80 @@ pub fn account_for_folder(conn: &Connection, folder_id: Option<i64>) -> Result<S
         }
     }
     Ok(DEFAULT_ACCOUNT_ID.to_string())
+}
+
+pub async fn load_account_client_with_init(
+    app_handle: &AppHandle,
+    state: &State<'_, TelegramState>,
+    account_id: &str,
+) -> Result<Client, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return state
+            .client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Client not connected".to_string());
+    }
+
+    let api_id = state
+        .api_id
+        .lock()
+        .await
+        .ok_or_else(|| "No API ID configured".to_string())?;
+    crate::commands::auth::ensure_account_client_initialized(app_handle, state, account_id, api_id).await
+}
+
+pub async fn load_account_client_cached(
+    state: &TelegramState,
+    account_id: &str,
+) -> Result<Client, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return state
+            .client
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "Client not connected".to_string());
+    }
+
+    state
+        .account_clients
+        .lock()
+        .await
+        .get(account_id)
+        .cloned()
+        .ok_or_else(|| format!("Telegram account '{}' is not connected", account_id))
+}
+
+pub async fn resolve_peer_for_account(
+    client: &Client,
+    folder_id: Option<i64>,
+    state: &TelegramState,
+    account_id: &str,
+) -> Result<Peer, String> {
+    if account_id == DEFAULT_ACCOUNT_ID {
+        return crate::commands::utils::resolve_peer(client, folder_id, &state.peer_cache).await;
+    }
+
+    {
+        let account_caches = state.account_peer_cache.read().await;
+        if let (Some(id), Some(cache)) = (folder_id, account_caches.get(account_id)) {
+            if let Some(peer) = cache.get(&id) {
+                return Ok(peer.clone());
+            }
+        }
+    }
+
+    let peer = crate::commands::utils::resolve_peer(client, folder_id, &state.peer_cache).await?;
+    if let Some(id) = folder_id {
+        let mut account_caches = state.account_peer_cache.write().await;
+        account_caches
+            .entry(account_id.to_string())
+            .or_default()
+            .insert(id, peer.clone());
+    }
+    Ok(peer)
 }
 
 pub fn set_folder_locked_account_in_db(

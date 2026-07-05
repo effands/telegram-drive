@@ -7,7 +7,8 @@ use crate::TelegramState;
 use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
 use crate::commands::accounts::{
-    account_for_folder, delete_file_accounting, record_file_accounting, DEFAULT_ACCOUNT_ID,
+    account_for_folder, delete_file_accounting, load_account_client_with_init, record_file_accounting,
+    resolve_peer_for_account, DEFAULT_ACCOUNT_ID,
 };
 use crate::commands::utils::{resolve_peer, map_error};
 use crate::vpn_optimizer::{NetworkConfig, backoff_ms};
@@ -1207,6 +1208,7 @@ pub async fn cmd_download_file(
     req: DownloadFileRequest,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
 ) -> Result<String, String> {
@@ -1247,16 +1249,13 @@ pub async fn cmd_download_file(
     #[cfg(not(target_os = "android"))]
     let actual_save_path = save_path.clone();
 
-    let client_opt = { state.client.lock().await.clone() };
-    #[cfg(debug_assertions)]
-    if client_opt.is_none() { 
-        log::info!("[MOCK] Downloaded message {} from {:?} to {}", message_id, folder_id, actual_save_path);
-        if let Err(e) = tokio::fs::write(&actual_save_path, b"Mock Content").await { return Err(e.to_string()); }
-        return Ok("Download successful".to_string());
-    }
-    let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
-    
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
+
+    let peer = resolve_peer_for_account(&client, folder_id, &state, &account_id).await?;
 
     // Use get_messages_by_id for efficient message lookup (same as server.rs)
     let messages = client.get_messages_by_id(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
@@ -1552,33 +1551,18 @@ pub async fn cmd_move_files(
 #[tauri::command]
 pub async fn cmd_get_files(
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
     db_pool: State<'_, DbConnection>,
 ) -> Result<Vec<FileMetadata>, String> {
-    let client_opt = { state.client.lock().await.clone() };
-    #[cfg(debug_assertions)]
-    if client_opt.is_none() { 
-        log::info!("[MOCK] Returning mock files for folder {:?}", folder_id);
-        return Ok(Vec::new()); // No mock files for now
-    }
-    let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
-    let mut files = Vec::new();
-    let folder_account_id = match folder_id {
-        Some(id) => {
-            let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
-            let mut stmt = conn
-                .prepare("SELECT account_id FROM folder_metadata WHERE channel_id = ?")
-                .map_err(|e| e.to_string())?;
-            stmt.bind((1, id)).map_err(|e| e.to_string())?;
-            match stmt.next().map_err(|e| e.to_string())? {
-                sqlite::State::Row => stmt.read::<Option<String>, _>(0).map_err(|e| e.to_string())?,
-                sqlite::State::Done => None,
-            }
-        }
-        None => Some(DEFAULT_ACCOUNT_ID.to_string()),
+    let folder_account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
     };
+    let client = load_account_client_with_init(&app_handle, &state, &folder_account_id).await?;
+    let mut files = Vec::new();
     
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let peer = resolve_peer_for_account(&client, folder_id, &state, &folder_account_id).await?;
 
     let mut msgs = client.iter_messages(&peer);
     while let Some(msg) = msgs.next().await.map_err(|e| e.to_string())? {
@@ -1600,7 +1584,7 @@ pub async fn cmd_get_files(
                 _ => ("Unknown".to_string(), 0, None, None),
             };
             files.push(FileMetadata {
-                id: msg.id() as i64, folder_id, account_id: folder_account_id.clone(), name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
+                id: msg.id() as i64, folder_id, account_id: Some(folder_account_id.clone()), name, size: size as u64, mime_type: mime, file_ext: ext, created_at: msg.date().to_string(), icon_type: "file".into()
             });
         }
     }
@@ -2153,6 +2137,7 @@ pub async fn cmd_upload_from_url(
     state: State<'_, TelegramState>,
     bw_state: State<'_, Arc<BandwidthManager>>,
     net_config: State<'_, std::sync::Arc<NetworkConfig>>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<String, String> {
     let mut client_builder = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
@@ -2489,13 +2474,16 @@ pub async fn cmd_upload_from_url(
         return Err(e);
     }
 
-    let client_opt = { state.client.lock().await.clone() };
-    let client = match client_opt {
-        Some(c) => c,
-        None => {
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client = match load_account_client_with_init(&app_handle, &state, &account_id).await {
+        Ok(c) => c,
+        Err(e) => {
             bw_state.release_up(actual_size);
             let _ = tokio::fs::remove_file(&temp_file_path).await;
-            return Err("Client not connected".to_string());
+            return Err(e);
         }
     };
 
@@ -2572,6 +2560,7 @@ pub async fn cmd_upload_from_url(
             })
             .unwrap_or_else(|| "remote_file".to_string())
     });
+    let file_name_for_record = file_name.clone();
     
     let mut upload_task = tokio::spawn(async move {
         client_clone.upload_stream(&mut reader, file_size as usize, file_name).await
@@ -2613,7 +2602,7 @@ pub async fn cmd_upload_from_url(
 
     let message = InputMessage::new().text("").file(uploaded_file);
 
-    let peer = match resolve_peer(&client, folder_id, &state.peer_cache).await {
+    let peer = match resolve_peer_for_account(&client, folder_id, &state, &account_id).await {
         Ok(p) => p,
         Err(e) => {
             bw_state.release_up(actual_size);
@@ -2628,11 +2617,13 @@ pub async fn cmd_upload_from_url(
     let respect_flood = net_config.should_respect_flood_wait();
     let mut last_err = String::new();
     let mut send_success = false;
+    let mut sent_message_id: Option<i32> = None;
 
     for attempt in 0..=max_retries {
         match client.send_message(&peer, message.clone()).await {
-            Ok(_) => {
+            Ok(sent_message) => {
                 send_success = true;
+                sent_message_id = Some(sent_message.id());
                 break;
             }
             Err(e) => {
@@ -2660,6 +2651,18 @@ pub async fn cmd_upload_from_url(
     let _ = tokio::fs::remove_file(&temp_file_path).await;
 
     if send_success {
+        if let Some(message_id) = sent_message_id {
+            if let Ok(conn) = db_pool.lock() {
+                let _ = record_file_accounting(
+                    &conn,
+                    &account_id,
+                    folder_id,
+                    message_id as i64,
+                    &file_name_for_record,
+                    actual_size,
+                );
+            }
+        }
         let _ = app_handle.emit("remote-upload-progress", RemoteProgressPayload {
             id: transfer_id,
             phase: "uploading",

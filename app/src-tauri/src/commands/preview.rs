@@ -7,7 +7,8 @@ use rand::Rng;
 use tokio::io::AsyncWriteExt;
 use crate::TelegramState;
 use crate::bandwidth::BandwidthManager;
-use crate::commands::utils::resolve_peer;
+use crate::db::DbConnection;
+use crate::commands::accounts::{account_for_folder, load_account_client_with_init, resolve_peer_for_account};
 
 /// Supported image file extensions for thumbnails.
 /// Shared between Tauri commands and the REST API cache cleanup.
@@ -125,6 +126,7 @@ pub async fn cmd_get_preview(
     folder_id: Option<i64>,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
     bw_state: State<'_, Arc<BandwidthManager>>,
 ) -> Result<String, String> {
     let cache_dir = app_handle
@@ -137,14 +139,12 @@ pub async fn cmd_get_preview(
     }
     log::info!("Using preview cache dir: {:?}", cache_dir);
     log::info!("Preview Request: msg_id={}", message_id);
-    let client_opt = { state.client.lock().await.clone() };
-    #[cfg(debug_assertions)]
-    if client_opt.is_none() {
-        return Ok("".to_string());
-    }
-    let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
-
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
+    let peer = resolve_peer_for_account(&client, folder_id, &state, &account_id).await?;
     let messages = client.get_messages_by_id(&peer, &[message_id])
         .await.map_err(|e| e.to_string())?;
     let target_message = messages.into_iter().flatten().next();
@@ -390,6 +390,7 @@ pub async fn cmd_get_thumbnail(
     folder_id: Option<i64>,
     app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<String, String> {
     // Check if thumbnail already in cache
     let cache_dir = app_handle
@@ -424,14 +425,12 @@ pub async fn cmd_get_thumbnail(
     }
 
     // No cache, need to fetch from Telegram
-    let client_opt = { state.client.lock().await.clone() };
-    #[cfg(debug_assertions)]
-    if client_opt.is_none() {
-        return Ok("".to_string());
-    }
-    let client = client_opt.ok_or_else(|| "Client not connected".to_string())?;
-
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
+    };
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
+    let peer = resolve_peer_for_account(&client, folder_id, &state, &account_id).await?;
     let messages = client.get_messages_by_id(&peer, &[message_id])
         .await.map_err(|e| e.to_string())?;
     if let Some(m) = messages.into_iter().flatten().next() {

@@ -1,7 +1,8 @@
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
 use actix_cors::Cors;
+use crate::commands::accounts::{account_for_folder, load_account_client_cached, resolve_peer_for_account};
 use crate::commands::TelegramState;
-use crate::commands::utils::resolve_peer;
+use crate::db::DbConnection;
 use grammers_client::types::Media;
 use crate::transcode::TranscodeManager;
 
@@ -222,6 +223,7 @@ async fn stream_media(
     query: web::Query<StreamQuery>,
     data: web::Data<Arc<TelegramState>>,
     token_data: web::Data<StreamTokenData>,
+    db_conn: web::Data<DbConnection>,
 ) -> impl Responder {
     let (folder_id_str, message_id) = path.into_inner();
 
@@ -253,13 +255,25 @@ async fn stream_media(
         }
     };
 
-    let client_opt = {
-        data.client.lock().await.clone()
+    let account_id = {
+        let conn = match db_conn.lock() {
+            Ok(conn) => conn,
+            Err(_) => return HttpResponse::InternalServerError().body("DB poisoned"),
+        };
+        match account_for_folder(&conn, folder_id) {
+            Ok(account_id) => account_id,
+            Err(e) => {
+                log::error!("Stream request failed: account lookup error for msg {}: {}", message_id, e);
+                return HttpResponse::InternalServerError().body(e);
+            }
+        }
     };
+    let state = data.get_ref().as_ref();
 
-    if let Some(client) = client_opt {
-        log::debug!("Stream request: Client acquired, resolving peer for msg {}...", message_id);
-        match resolve_peer(&client, folder_id, &data.peer_cache).await {
+    match load_account_client_cached(state, &account_id).await {
+        Ok(client) => {
+            log::debug!("Stream request: Client for account {} acquired, resolving peer for msg {}...", account_id, message_id);
+            match resolve_peer_for_account(&client, folder_id, state, &account_id).await {
             Ok(peer) => {
                 log::debug!("Stream request: Peer resolved, fetching message {}...", message_id);
                 // Try to fetch message efficiently
@@ -295,9 +309,11 @@ async fn stream_media(
                 HttpResponse::BadRequest().body(format!("Peer resolution failed: {}", e))
             },
         }
-    } else {
-        log::error!("Stream request failed: Telegram client not connected for msg {}", message_id);
-        HttpResponse::ServiceUnavailable().body("Telegram client not connected")
+        }
+        Err(e) => {
+            log::error!("Stream request failed: Telegram client unavailable for account {} msg {}: {}", account_id, message_id, e);
+            HttpResponse::ServiceUnavailable().body(e)
+        }
     }
 }
 

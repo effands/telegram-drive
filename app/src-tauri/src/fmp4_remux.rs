@@ -15,7 +15,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use crate::commands::accounts::{account_for_folder, load_account_client_with_init, resolve_peer_for_account};
 use crate::commands::TelegramState;
+use crate::db::DbConnection;
 use crate::server::StreamTokenData;
 use crate::transcode::TranscodeManager;
 
@@ -211,7 +213,9 @@ fn parse_ffmpeg_time(time: &str) -> Result<f64, ()> {
 pub async fn cmd_prepare_fmp4_stream(
     message_id: i32,
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, TelegramState>,
+    db_pool: tauri::State<'_, DbConnection>,
     manager: tauri::State<'_, Arc<TranscodeManager>>,
     remux_state: tauri::State<'_, Fmp4RemuxState>,
 ) -> Result<Fmp4StreamInfo, String> {
@@ -257,23 +261,26 @@ pub async fn cmd_prepare_fmp4_stream(
         jobs.insert(file_key.clone(), None);
     }
 
-    // Get Telegram client
-    let client = {
-        state.client.lock().await.clone()
+    let folder_lookup_id = if folder_id == 0 { None } else { Some(folder_id) };
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_lookup_id)?
     };
-    let client = client.ok_or_else(|| {
-        // Clean up job state on error
-        let rs = remux_state.inner().clone();
-        let fk = file_key.clone();
-        tokio::spawn(async move { rs.jobs.lock().await.remove(&fk); });
-        "Not connected to Telegram".to_string()
-    })?;
+    let client = load_account_client_with_init(&app_handle, &state, &account_id)
+        .await
+        .map_err(|e| {
+            let rs = remux_state.inner().clone();
+            let fk = file_key.clone();
+            tokio::spawn(async move { rs.jobs.lock().await.remove(&fk); });
+            e
+        })?;
 
     // Resolve peer and get media
-    let peer = crate::commands::utils::resolve_peer(
+    let peer = resolve_peer_for_account(
         &client,
-        if folder_id == 0 { None } else { Some(folder_id) },
-        &state.peer_cache,
+        folder_lookup_id,
+        &state,
+        &account_id,
     )
     .await
     .map_err(|e| {

@@ -21,7 +21,9 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex;
 
+use crate::commands::accounts::{account_for_folder, load_account_client_with_init, resolve_peer_for_account};
 use crate::commands::TelegramState;
+use crate::db::DbConnection;
 use crate::mp4_utils;
 use grammers_client::types::Media;
 use tauri::Manager;
@@ -881,7 +883,9 @@ pub async fn cmd_prepare_transcoded_stream(
     message_id: i32,
     folder_id: Option<i64>,
     quality: String,
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, TelegramState>,
+    db_pool: tauri::State<'_, DbConnection>,
     manager: tauri::State<'_, TranscodeManager>,
 ) -> Result<TranscodePrepareResult, String> {
     let folder_id = folder_id.unwrap_or(0);
@@ -957,16 +961,18 @@ pub async fn cmd_prepare_transcoded_stream(
         };
     }
 
-    // New job — start the pipeline
-    let client = {
-        state.client.lock().await.clone()
+    let folder_lookup_id = if folder_id == 0 { None } else { Some(folder_id) };
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_lookup_id)?
     };
-    let client = client.ok_or_else(|| "Not connected to Telegram".to_string())?;
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
 
-    let peer = crate::commands::utils::resolve_peer(
+    let peer = resolve_peer_for_account(
         &client,
-        if folder_id == 0 { None } else { Some(folder_id) },
-        &state.peer_cache,
+        folder_lookup_id,
+        &state,
+        &account_id,
     ).await?;
 
     let messages = client
@@ -983,7 +989,7 @@ pub async fn cmd_prepare_transcoded_stream(
     let media = msg.media().ok_or_else(|| "No media".to_string())?;
 
     // Get duration from mp4parse (quick moov chunk)
-    let duration_secs = get_duration_from_media(&client, message_id, folder_id, &state).await.ok();
+    let duration_secs = get_duration_from_media(&client, message_id, folder_id, &state, &account_id).await.ok();
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
 
@@ -1025,11 +1031,13 @@ async fn get_duration_from_media(
     message_id: i32,
     folder_id: i64,
     state: &TelegramState,
+    account_id: &str,
 ) -> Result<f64, String> {
-    let peer = crate::commands::utils::resolve_peer(
+    let peer = resolve_peer_for_account(
         client,
         if folder_id == 0 { None } else { Some(folder_id) },
-        &state.peer_cache,
+        state,
+        account_id,
     ).await?;
 
     let messages = client

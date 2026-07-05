@@ -1,7 +1,8 @@
 use tauri::State;
 use grammers_client::types::Media;
 use crate::TelegramState;
-use crate::commands::utils::resolve_peer;
+use crate::commands::accounts::{account_for_folder, load_account_client_with_init, resolve_peer_for_account};
+use crate::db::DbConnection;
 use crate::mp4_utils;
 
 #[derive(serde::Serialize)]
@@ -32,14 +33,17 @@ pub struct BatchMetadataEntry {
 pub async fn cmd_get_video_metadata(
     message_id: i32,
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<VideoMetadata, String> {
-    let client = {
-        state.client.lock().await.clone()
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
     };
-    let client = client.ok_or_else(|| "Not connected to Telegram".to_string())?;
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
 
-    let buffer = download_moov_chunk(&client, message_id, folder_id, &state).await?;
+    let buffer = download_moov_chunk(&client, message_id, folder_id, &state, &account_id).await?;
     let meta = parse_mp4_metadata(&buffer)?;
     let (width, height) = mp4_utils::scan_video_tkhd_dimensions(&buffer);
 
@@ -57,13 +61,16 @@ pub async fn cmd_get_video_metadata(
 pub async fn cmd_get_video_metadata_batch(
     requests: Vec<BatchMetadataRequest>,
     folder_id: Option<i64>,
+    app_handle: tauri::AppHandle,
     state: State<'_, TelegramState>,
+    db_pool: State<'_, DbConnection>,
 ) -> Result<Vec<BatchMetadataEntry>, String> {
-    let client = {
-        state.client.lock().await.clone()
+    let account_id = {
+        let conn = db_pool.lock().map_err(|_| "DB poisoned".to_string())?;
+        account_for_folder(&conn, folder_id)?
     };
-    let client = client.ok_or_else(|| "Not connected to Telegram".to_string())?;
-    let peer = resolve_peer(&client, folder_id, &state.peer_cache).await?;
+    let client = load_account_client_with_init(&app_handle, &state, &account_id).await?;
+    let peer = resolve_peer_for_account(&client, folder_id, &state, &account_id).await?;
 
     let mut results: Vec<BatchMetadataEntry> = Vec::with_capacity(requests.len());
 
@@ -130,8 +137,9 @@ async fn download_moov_chunk(
     message_id: i32,
     folder_id: Option<i64>,
     state: &TelegramState,
+    account_id: &str,
 ) -> Result<Vec<u8>, String> {
-    let peer = resolve_peer(client, folder_id, &state.peer_cache).await?;
+    let peer = resolve_peer_for_account(client, folder_id, state, account_id).await?;
     let messages = client
         .get_messages_by_id(&peer, &[message_id])
         .await
